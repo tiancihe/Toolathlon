@@ -21,6 +21,9 @@ Toolathlon is a benchmark to assess language agents' general tool use in realist
   <img src="assets/demo.gif" width="100%" alt="Demo">
 </div>
 
+## News
+[2025.11.28] We have provided a ready-to-use public eval service (you do not need to setup anything!), please refer to `EVAL_SERVICE_README.md` for more details.
+
 ## NOTE
 If you are unable/unwilling to install docker/podman, but still want to try our benchmark, please refer to `README_nodocker.md`.
 
