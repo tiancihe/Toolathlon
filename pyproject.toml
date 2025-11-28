@@ -170,4 +170,6 @@ dependencies = [
     "seaborn>=0.13.2",
     "gcloud>=0.18.3",
     "scipy>=1.16.2",
+    "fastapi>=0.121.3",
+    "websockets>=15.0.1",
 ]
