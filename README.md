@@ -24,9 +24,6 @@ Toolathlon is a benchmark to assess language agents' general tool use in realist
 ## News
 [2025.11.28] 🚀 We have provided a ready-to-use public eval service (you do not need to setup anything!), please refer to [EVAL_SERVICE_README.md](EVAL_SERVICE_README.md) for more details.
 
-## NOTE
-If you are unable/unwilling to install docker/podman, but still want to try our benchmark, please refer to `README_nodocker.md`.
-
 ## Quick Start
 > Basically you have four ways of running Toolathlon evaluation:
 > 1. Using our public evaluation service: Check [EVAL_SERVICE_README.md](EVAL_SERVICE_README.md) for more details.
@@ -89,6 +86,8 @@ Then, pull our prepared image:
 ```
 bash global_preparation/pull_toolathlon_image.sh
 ```
+
+If you are unable/unwilling to install docker/podman, but still want to try our benchmark, please refer to [README_nodocker.md](README_nodocker.md).
 
 ### Configure Global Configs
 Simply set these two env variables, note that `TOOLATHLON_OPENAI_BASE_URL` must be an OpenAI SDK compatible one, as our agent scaffold relies on this:
