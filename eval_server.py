@@ -355,8 +355,8 @@ async def poll_job_status(job_id: str):
             }
         else:
             return {
-                "status": "unknown",
-                "error": "Job not found"
+                "status": "cancelled",
+                "error": "Job not found or has been cleaned up"
             }
 
     status = current_job.get("status", "running")

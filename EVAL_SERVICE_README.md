@@ -58,7 +58,23 @@ python eval_client.py run \
 ```
 It will return the results exactly the same as in private mode, we won't save your API keys locally. You can find the running log in the input `[server-log]`, and after the eval is done, you can find the results and trajectory logs in the input `[output-file]` and `[traj-log]`.
 
-If you meet any trouble, please feel free to contact us (jlini@cse.ust.hk / junxianh@cse.ust.hk), e.g. we may help you testing your model if provided with your public API endpoint and API key.
+#### Resume Incomplete Tasks
+
+If your evaluation was interrupted (e.g., network issues, client/server crash), you can resume it by providing the same job ID:
+
+```bash
+python eval_client.py run \
+  -- ... # all other arguments you entered previously
+  --job-id job_abc123def456  # Use the same job ID to resume
+```
+
+**Note:**
+- You can find your job ID from the initial submission output or from your log files
+- The server will output a warning if the job ID already exists, but will accept the request
+- Results will be written to the same output directory on server
+- This works for both public and private modes
+
+If you meet any trouble, please feel free to contact us (jlini@cse.ust.hk / junxianh@cse.ust.hk), e.g. we may help you testing your model if provided with your public API endpoint and API key or set up a special channel for you.
 
 # Implemention Details
 
