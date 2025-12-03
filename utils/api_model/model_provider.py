@@ -1,9 +1,11 @@
 import asyncio
 import re
+import os
+import json
 from agents import (
-    ModelProvider, 
-    OpenAIChatCompletionsModel, 
-    Model, 
+    ModelProvider,
+    OpenAIChatCompletionsModel,
+    Model,
     set_tracing_disabled,
     _debug
 )
@@ -452,44 +454,71 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
         stream_options = ChatCmplHelpers.get_stream_options_param(
             self._get_client(), model_settings, stream=stream
         )
-        
+
+        # Load user-specified model parameters if provided
+        user_model_params = None
+        model_params_file = os.environ.get('TOOLATHLON_MODEL_PARAMS_FILE')
+        if model_params_file and os.path.exists(model_params_file):
+            try:
+                with open(model_params_file, 'r') as f:
+                    user_model_params = json.load(f)
+                logger.info(f"[ModelProvider] Using custom model parameters from: {model_params_file}")
+                logger.info(f"[ModelProvider] Custom parameters: {json.dumps(user_model_params)}")
+            except Exception as e:
+                logger.warning(f"[ModelProvider] Failed to load model parameters file: {e}")
+
         # Build base parameters
-        base_params = {
-            'model': self.model,
-            'messages': converted_messages,
-            'tools': converted_tools or NOT_GIVEN,
-            'temperature': self._non_null_or_not_given(model_settings.temperature),
-            'top_p': self._non_null_or_not_given(model_settings.top_p),
-            'frequency_penalty': self._non_null_or_not_given(model_settings.frequency_penalty),
-            'presence_penalty': self._non_null_or_not_given(model_settings.presence_penalty),
-            'tool_choice': tool_choice,
-            'response_format': response_format,
-            'stream': stream,
-            'stream_options': self._non_null_or_not_given(stream_options),
-            'store': self._non_null_or_not_given(store),
-            'reasoning_effort': self._non_null_or_not_given(reasoning_effort),
-            'extra_headers': { **HEADERS, **(model_settings.extra_headers or {}) },
-            'extra_query': model_settings.extra_query,
-            'extra_body': model_settings.extra_body,
-            'metadata': self._non_null_or_not_given(model_settings.metadata),
-        }
-        
-        # Add model-specific parameters
-        if model_config['use_max_completion_tokens']:
-            base_params['max_completion_tokens'] = self._non_null_or_not_given(model_settings.max_tokens)
+        if user_model_params:
+            # User specified parameters: only use required params + user params
+            logger.info("[ModelProvider] Using USER-SPECIFIED parameters mode")
+            base_params = {
+                'model': self.model,
+                'messages': converted_messages,
+                'tools': converted_tools or NOT_GIVEN,
+                'tool_choice': tool_choice,
+                'stream': stream,
+                **user_model_params  # User's custom parameters
+            }
         else:
-            base_params['max_tokens'] = self._non_null_or_not_given(model_settings.max_tokens)
-            
-        if model_config['use_parallel_tool_calls']:
-            base_params['parallel_tool_calls'] = parallel_tool_calls
-        
-        # override reasoning_effort
-        if model_config.get('reasoning_effort') is not None:
-            base_params['reasoning_effort'] = model_config['reasoning_effort']
-        
-        # for claude-4.5-sonnet, top_p and temperament cannot be set simultaneously
-        if "claude" in self.model and any(version in self.model for version in ["4.5", "4-5"]):
-            base_params.pop('top_p')
+            # Default mode: use all parameters from model_settings
+            logger.info("[ModelProvider] Using DEFAULT parameters mode")
+            base_params = {
+                'model': self.model,
+                'messages': converted_messages,
+                'tools': converted_tools or NOT_GIVEN,
+
+                'temperature': self._non_null_or_not_given(model_settings.temperature),
+                'top_p': self._non_null_or_not_given(model_settings.top_p),
+                'frequency_penalty': self._non_null_or_not_given(model_settings.frequency_penalty),
+                'presence_penalty': self._non_null_or_not_given(model_settings.presence_penalty),
+                'tool_choice': tool_choice,
+                'response_format': response_format,
+                'stream': stream,
+                'stream_options': self._non_null_or_not_given(stream_options),
+                'store': self._non_null_or_not_given(store),
+                'reasoning_effort': self._non_null_or_not_given(reasoning_effort),
+                'extra_headers': { **HEADERS, **(model_settings.extra_headers or {}) },
+                'extra_query': model_settings.extra_query,
+                'extra_body': model_settings.extra_body,
+                'metadata': self._non_null_or_not_given(model_settings.metadata),
+            }
+
+            # Add model-specific parameters
+            if model_config['use_max_completion_tokens']:
+                base_params['max_completion_tokens'] = self._non_null_or_not_given(model_settings.max_tokens)
+            else:
+                base_params['max_tokens'] = self._non_null_or_not_given(model_settings.max_tokens)
+
+            if model_config['use_parallel_tool_calls']:
+                base_params['parallel_tool_calls'] = parallel_tool_calls
+
+            # override reasoning_effort
+            if model_config.get('reasoning_effort') is not None:
+                base_params['reasoning_effort'] = model_config['reasoning_effort']
+
+            # for claude-4.5-sonnet, top_p and temperament cannot be set simultaneously
+            if "claude" in self.model and any(version in self.model for version in ["4.5", "4-5"]):
+                base_params.pop('top_p')
         
         ret = await self._get_client().chat.completions.create(**base_params)
 

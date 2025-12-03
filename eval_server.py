@@ -12,12 +12,18 @@ import sys
 import time
 import uuid
 import json
+import tarfile
+import io
+import hashlib
+import tempfile
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
 from collections import defaultdict
 
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 import uvicorn
 
@@ -34,6 +40,7 @@ current_job: Optional[Dict[str, Any]] = None
 ip_submission_history: Dict[str, list] = defaultdict(list)
 ws_proxy_process = None  # Global WebSocket proxy process
 ws_proxy_log_file = None  # Global log file handle
+transferred_tasks: Dict[str, set] = defaultdict(set)  # job_id -> set of transferred task names
 
 # ===== Configuration =====
 TIMEOUT_SECONDS = 240 * 60  # 240 minutes
@@ -52,6 +59,9 @@ class SubmitEvaluationRequest(BaseModel):
     model_name: str
     workers: int = 10
     custom_job_id: Optional[str] = None  # Allow custom job_id
+    model_params: Optional[Dict[str, Any]] = None  # User-specified model parameters
+    task_list_content: Optional[str] = None  # Task list file content (each line is a task name)
+    skip_container_restart: bool = False  # Skip container restart (for debugging/testing only)
 
 class SubmitEvaluationResponse(BaseModel):
     status: str
@@ -61,6 +71,123 @@ class SubmitEvaluationResponse(BaseModel):
     warning: Optional[str] = None  # Warning if job_id already exists
 
 # ===== Helper Functions =====
+
+def load_sensitive_values() -> Dict[str, str]:
+    """Load sensitive values from token_key_session.py"""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'configs'))
+        from token_key_session import all_token_key_session
+
+        sensitive_keys = [
+            'serper_api_key',
+            'google_cloud_console_api_key',
+            'gcp_project_id',
+            'google_client_id',
+            'google_client_secret',
+            'google_refresh_token',
+            'github_token',
+            'huggingface_token',
+            'wandb_api_key',
+            'notion_integration_key',
+            'notion_integration_key_eval',
+            'source_notion_page_url',
+            'eval_notion_page_url',
+            'snowflake_account',
+            'snowflake_user',
+            'snowflake_password'
+        ]
+
+        sensitive_values = {}
+        for key in sensitive_keys:
+            value = all_token_key_session.get(key)
+            if value and isinstance(value, str) and len(value) > 0:
+                sensitive_values[key] = value
+
+        return sensitive_values
+    except Exception as e:
+        log(f"Warning: Failed to load sensitive values: {e}")
+        return {}
+
+def anonymize_content(content: str, sensitive_values: Dict[str, str]) -> str:
+    """Anonymize sensitive values in content"""
+    if not content or not sensitive_values:
+        return content
+
+    anonymized = content
+    for key, value in sensitive_values.items():
+        if value and len(value) > 1:
+            # Replace with first char + "***" + last char
+            replacement = f"{value[0]}***{value[-1]}"
+            anonymized = anonymized.replace(value, replacement)
+
+    return anonymized
+
+def anonymize_file_content(file_path: Path, sensitive_values: Dict[str, str]) -> Optional[str]:
+    """
+    Read and anonymize file content.
+    Returns anonymized content as string, or None if binary file.
+    """
+    try:
+        # Try to read as text
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Anonymize
+        return anonymize_content(content, sensitive_values)
+
+    except (UnicodeDecodeError, Exception):
+        # Binary file or read error, return None
+        return None
+
+def anonymize_directory(source_dir: Path, temp_dir: Path, sensitive_values: Dict[str, str]):
+    """
+    Recursively copy directory and anonymize all text files.
+
+    Args:
+        source_dir: Source directory to copy from
+        temp_dir: Temporary directory to copy to
+        sensitive_values: Dictionary of sensitive values to anonymize
+    """
+    for item in source_dir.iterdir():
+        dest_item = temp_dir / item.name
+
+        if item.is_dir():
+            # Recursively process subdirectories
+            dest_item.mkdir(exist_ok=True)
+            anonymize_directory(item, dest_item, sensitive_values)
+
+        elif item.is_file():
+            # Try to anonymize text files
+            anonymized_content = anonymize_file_content(item, sensitive_values)
+
+            if anonymized_content is not None:
+                # Text file - write anonymized content
+                with open(dest_item, 'w', encoding='utf-8') as f:
+                    f.write(anonymized_content)
+            else:
+                # Binary file - copy as is
+                shutil.copy2(item, dest_item)
+
+def is_task_finished(status: dict) -> bool:
+    """
+    Check if a task is finished (including success and failure cases).
+
+    Returns True if:
+    - preprocess failed, OR
+    - preprocess succeeded AND running reached terminal state
+    """
+    preprocess = status.get('preprocess')
+    running = status.get('running')
+
+    # Case 1: preprocess failed -> task finished
+    if preprocess == 'fail':
+        return True
+
+    # Case 2: preprocess succeeded and running reached terminal state
+    if preprocess == 'done' and running in ['done', 'timeout', 'max_turn_exceeded', 'fail']:
+        return True
+
+    return False
 
 def check_job_id_exists(job_id: str) -> bool:
     """Check if job_id already exists in dumps directory or is currently running"""
@@ -74,6 +201,10 @@ def check_job_id_exists(job_id: str) -> bool:
 
 def check_ip_rate_limit(ip: str) -> tuple[bool, str]:
     """Check if IP has exceeded rate limit"""
+    # -1 means unlimited
+    if MAX_SUBMISSIONS_PER_IP == -1:
+        return True, ""
+
     now = datetime.now()
     cutoff = now - timedelta(hours=RATE_LIMIT_HOURS)
 
@@ -123,20 +254,52 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
             f.write(f"Model: {config['model_name']}\n")
             f.write(f"Workers: {config['workers']}\n")
             f.write(f"Started: {datetime.now().isoformat()}\n")
+            if config.get('model_params'):
+                f.write(f"Custom model parameters: {json.dumps(config['model_params'], indent=2)}\n")
+            if config.get('skip_container_restart'):
+                f.write(f"⚠️  WARNING: Container restart skipped (debugging/testing mode)\n")
+            if config.get('task_list_content'):
+                f.write(f"Custom task list provided\n")
             f.write(f"{'='*50}\n\n")
 
-        # Step 1: Deploy containers
-        with open(log_file, 'a') as f:
-            f.write("=== Step 1: Deploying local containers ===\n")
-            f.flush()
+        # Save model_params to file if provided
+        if config.get('model_params'):
+            model_params_file = job_dir / "model_params.json"
+            with open(model_params_file, 'w') as f:
+                json.dump(config['model_params'], f, indent=2)
+            log(f"[Server] Saved custom model parameters to: {model_params_file}")
 
-        deploy_process = await run_command_async(
-            ["bash", "global_preparation/deploy_containers.sh", "true"],
-            env=os.environ.copy(),
-            log_file=log_file
-        )
+        # Save task_list to file if provided
+        task_list_file = None
+        if config.get('task_list_content'):
+            task_list_file = job_dir / "task_list.txt"
+            with open(task_list_file, 'w') as f:
+                f.write(config['task_list_content'])
+            log(f"[Server] Saved custom task list to: {task_list_file}")
 
-        await deploy_process.wait()
+        # Step 1: Deploy containers (skip if requested)
+        if config.get('skip_container_restart'):
+            with open(log_file, 'a') as f:
+                f.write("=== Step 1: Container deployment SKIPPED (user requested) ===\n")
+                f.write("⚠️  WARNING: Skipping container restart is recommended ONLY for:\n")
+                f.write("   - Debugging purposes\n")
+                f.write("   - Testing a small number of tasks\n")
+                f.write("   For complete evaluation, it is STRONGLY recommended to restart containers\n")
+                f.write("   to ensure a clean environment.\n\n")
+                f.flush()
+            log(f"[Server] WARNING: Skipping container restart for job {job_id}")
+        else:
+            with open(log_file, 'a') as f:
+                f.write("=== Step 1: Deploying local containers ===\n")
+                f.flush()
+
+            deploy_process = await run_command_async(
+                ["bash", "global_preparation/deploy_containers.sh", "true"],
+                env=os.environ.copy(),
+                log_file=log_file
+            )
+
+            await deploy_process.wait()
 
         with open(log_file, 'a') as f:
             f.write("\n=== Step 2: Running parallel tests ===\n")
@@ -151,6 +314,16 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
         else:  # private
             env["TOOLATHLON_OPENAI_BASE_URL"] = f"http://localhost:{WS_PROXY_PORT}/v1"
             env["TOOLATHLON_OPENAI_API_KEY"] = "dummy"
+
+        # Set model_params file path if provided
+        if config.get('model_params'):
+            model_params_file = job_dir / "model_params.json"
+            env["TOOLATHLON_MODEL_PARAMS_FILE"] = str(model_params_file)
+
+        # Set task_list file path if provided (override the empty default in run_parallel.sh)
+        if task_list_file:
+            env["TASK_LIST"] = str(task_list_file)
+            log(f"[Server] Using custom task list: {task_list_file}")
 
         run_process = await run_command_async(
             [
@@ -310,12 +483,23 @@ async def submit_evaluation(request: Request, data: SubmitEvaluationRequest):
         "base_url": data.base_url,
         "api_key": data.api_key,
         "model_name": data.model_name,
-        "workers": data.workers
+        "workers": data.workers,
+        "model_params": data.model_params,
+        "task_list_content": data.task_list_content,
+        "skip_container_restart": data.skip_container_restart
     }
 
     asyncio.create_task(execute_evaluation(job_id, data.mode, config))
 
     log(f"[Server] Accepted job {job_id} from {client_ip} (mode: {data.mode})")
+    if data.model_params:
+        log(f"[Server] Using custom model parameters: {json.dumps(data.model_params)}")
+    if data.task_list_content:
+        # Count number of tasks in the list
+        task_count = len([line.strip() for line in data.task_list_content.strip().split('\n') if line.strip()])
+        log(f"[Server] Using custom task list with {task_count} tasks")
+    if data.skip_container_restart:
+        log(f"[Server] WARNING: Container restart will be skipped (debugging/testing mode only)")
 
     response = {
         "status": "accepted",
@@ -332,6 +516,9 @@ async def submit_evaluation(request: Request, data: SubmitEvaluationRequest):
 @app.get("/poll_job_status")
 async def poll_job_status(job_id: str):
     """Poll job status"""
+    # Load sensitive values for anonymization
+    sensitive_values = load_sensitive_values()
+
     if not current_job or current_job.get("job_id") != job_id:
         # Check if job exists in dumps (completed job)
         job_dir = Path(DUMPS_DIR) / job_id
@@ -339,14 +526,20 @@ async def poll_job_status(job_id: str):
 
         if eval_stats_file.exists():
             with open(eval_stats_file, 'r') as f:
-                eval_stats = json.load(f)
+                eval_stats_content = f.read()
+
+            # Anonymize eval_stats
+            anonymized_eval_stats = anonymize_content(eval_stats_content, sensitive_values)
+            eval_stats = json.loads(anonymized_eval_stats)
 
             # Also read traj_log_all.jsonl if exists
             traj_log_file = job_dir / "traj_log_all.jsonl"
             traj_log_all = None
             if traj_log_file.exists():
                 with open(traj_log_file, 'r') as f:
-                    traj_log_all = f.read()
+                    traj_log_content = f.read()
+                # Anonymize traj_log
+                traj_log_all = anonymize_content(traj_log_content, sensitive_values)
 
             return {
                 "status": "completed",
@@ -363,8 +556,18 @@ async def poll_job_status(job_id: str):
     response = {"status": status}
 
     if status == "completed":
-        response["eval_stats"] = current_job.get("eval_stats", {})
-        response["traj_log_all"] = current_job.get("traj_log_all")
+        # Anonymize eval_stats if present
+        eval_stats = current_job.get("eval_stats", {})
+        eval_stats_str = json.dumps(eval_stats)
+        anonymized_eval_stats_str = anonymize_content(eval_stats_str, sensitive_values)
+        response["eval_stats"] = json.loads(anonymized_eval_stats_str)
+
+        # Anonymize traj_log_all if present
+        traj_log_all = current_job.get("traj_log_all")
+        if traj_log_all:
+            response["traj_log_all"] = anonymize_content(traj_log_all, sensitive_values)
+        else:
+            response["traj_log_all"] = None
     elif status in ["failed", "timeout"]:
         response["error"] = current_job.get("error", "Unknown error")
 
@@ -372,7 +575,7 @@ async def poll_job_status(job_id: str):
 
 @app.get("/get_server_log")
 async def get_server_log(job_id: str, offset: int = 0):
-    """Get server execution log with incremental reading"""
+    """Get server execution log with incremental reading and anonymization"""
     log_file = Path(DUMPS_DIR) / job_id / "server_stdout.log"
 
     if not log_file.exists():
@@ -384,11 +587,17 @@ async def get_server_log(job_id: str, offset: int = 0):
             "complete": False
         }
 
+    # Load sensitive values for anonymization
+    sensitive_values = load_sensitive_values()
+
     try:
         with open(log_file, 'r') as f:
             f.seek(offset)
             new_content = f.read()
             new_offset = f.tell()
+
+        # Anonymize content
+        anonymized_content = anonymize_content(new_content, sensitive_values)
 
         file_size = log_file.stat().st_size
 
@@ -401,7 +610,7 @@ async def get_server_log(job_id: str, offset: int = 0):
             job_complete = True
 
         return {
-            "content": new_content,
+            "content": anonymized_content,
             "offset": new_offset,
             "size": file_size,
             "complete": job_complete
@@ -421,7 +630,23 @@ async def cancel_job(job_id: str):
     global current_job
 
     if not current_job or current_job.get("job_id") != job_id:
-        raise HTTPException(status_code=404, detail="Job not found or not running")
+        # Check if job exists in dumps (already completed)
+        job_dir = Path(DUMPS_DIR) / job_id
+        if job_dir.exists():
+            # Job exists but is not running - check if it completed
+            eval_stats_file = job_dir / "eval_stats.json"
+            if eval_stats_file.exists():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Job has already completed. Cannot cancel a completed job."
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Job is not running. It may have already finished or been cancelled."
+                )
+        else:
+            raise HTTPException(status_code=404, detail="Job not found")
 
     # Kill process if exists
     if "process" in current_job:
@@ -474,6 +699,190 @@ async def cancel_job(job_id: str):
     log(f"[Server] Job {job_id} cancelled")
 
     return {"status": "cancelled", "job_id": job_id}
+
+@app.get("/get_completed_tasks")
+async def get_completed_tasks(job_id: str):
+    """
+    Get list of completed tasks that haven't been transferred yet.
+
+    Returns:
+        List of task names that are finished but not yet transferred
+    """
+    finalpool_dir = Path(DUMPS_DIR) / job_id / "finalpool"
+
+    if not finalpool_dir.exists():
+        return {"task_names": []}
+
+    completed_tasks = []
+
+    for task_dir in finalpool_dir.iterdir():
+        if not task_dir.is_dir():
+            continue
+
+        task_name = task_dir.name
+
+        # Skip already transferred tasks
+        if task_name in transferred_tasks[job_id]:
+            continue
+
+        # Check if task is finished
+        status_file = task_dir / "status.json"
+        if status_file.exists():
+            try:
+                with open(status_file, 'r') as f:
+                    status = json.load(f)
+
+                if is_task_finished(status):
+                    completed_tasks.append(task_name)
+            except Exception as e:
+                log(f"[Server] Error reading status for task {task_name}: {e}")
+
+    return {"task_names": completed_tasks}
+
+@app.get("/get_task_archive")
+async def get_task_archive(job_id: str, task_name: str):
+    """
+    Get a task directory as a tar.gz archive with MD5 verification.
+    All text files are anonymized before packaging.
+
+    Returns:
+        Streaming response with tar.gz content and MD5 hash in header
+    """
+    task_dir = Path(DUMPS_DIR) / job_id / "finalpool" / task_name
+
+    if not task_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Task {task_name} not found for job {job_id}")
+
+    # Load sensitive values for anonymization
+    sensitive_values = load_sensitive_values()
+
+    temp_dir = None
+    try:
+        # Create temporary directory for anonymized files
+        temp_dir = Path(tempfile.mkdtemp(prefix=f"toolathlon_anon_{task_name}_"))
+        temp_task_dir = temp_dir / task_name
+        temp_task_dir.mkdir(parents=True)
+
+        # Copy and anonymize all files
+        for item in task_dir.iterdir():
+            # Exclude legacy_results
+            if item.name == "legacy_results":
+                continue
+
+            dest_item = temp_task_dir / item.name
+
+            if item.is_dir():
+                # Recursively process directory
+                dest_item.mkdir(exist_ok=True)
+                anonymize_directory(item, dest_item, sensitive_values)
+            elif item.is_file():
+                # Anonymize single file
+                anonymized_content = anonymize_file_content(item, sensitive_values)
+                if anonymized_content is not None:
+                    # Text file
+                    with open(dest_item, 'w', encoding='utf-8') as f:
+                        f.write(anonymized_content)
+                else:
+                    # Binary file
+                    shutil.copy2(item, dest_item)
+
+        # Create tar.gz from anonymized directory
+        tar_buffer = io.BytesIO()
+        with tarfile.open(fileobj=tar_buffer, mode='w:gz') as tar:
+            tar.add(temp_task_dir, arcname=task_name, recursive=True)
+
+        tar_bytes = tar_buffer.getvalue()
+
+        # Calculate MD5
+        md5_hash = hashlib.md5(tar_bytes).hexdigest()
+
+        # Mark as transferred
+        transferred_tasks[job_id].add(task_name)
+
+        log(f"[Server] Sending task archive: {task_name}, size: {len(tar_bytes)} bytes, MD5: {md5_hash}")
+
+        # Return with MD5 in header
+        return Response(
+            content=tar_bytes,
+            media_type="application/gzip",
+            headers={
+                "Content-Disposition": f"attachment; filename={task_name}.tar.gz",
+                "X-Content-MD5": md5_hash
+            }
+        )
+
+    except Exception as e:
+        log(f"[Server] Error creating archive for task {task_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create archive: {str(e)}")
+    finally:
+        # Clean up temporary directory
+        if temp_dir and temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+@app.get("/get_static_files")
+async def get_static_files(job_id: str):
+    """
+    Get all static files (logs, stats, etc.) as a JSON dictionary.
+    All text content is anonymized before returning.
+
+    Returns:
+        Dictionary with filename -> content mapping
+    """
+    job_dir = Path(DUMPS_DIR) / job_id
+
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    # Load sensitive values for anonymization
+    sensitive_values = load_sensitive_values()
+
+    static_files = [
+        "container_all.log",
+        "eval_res_all.jsonl",
+        "eval_stats.json",
+        "run_all.log",
+        "traj_log_all.jsonl"
+    ]
+
+    # Find execution_report files
+    execution_reports = list(job_dir.glob("execution_report_finalpool_*.json"))
+
+    result = {}
+
+    # Read and anonymize static files
+    for filename in static_files:
+        file_path = job_dir / filename
+        if file_path.exists():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Anonymize content
+                anonymized_content = anonymize_content(content, sensitive_values)
+                result[filename] = anonymized_content
+
+            except Exception as e:
+                log(f"[Server] Error reading {filename}: {e}")
+                result[filename] = f"ERROR: {str(e)}"
+        else:
+            result[filename] = None
+
+    # Read and anonymize execution reports
+    for report_path in execution_reports:
+        try:
+            with open(report_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Anonymize content
+            anonymized_content = anonymize_content(content, sensitive_values)
+            result[report_path.name] = anonymized_content
+
+        except Exception as e:
+            log(f"[Server] Error reading {report_path.name}: {e}")
+
+    log(f"[Server] Sending static files for job {job_id}, {len(result)} files (anonymized)")
+
+    return result
 
 # ===== Main =====
 
@@ -561,10 +970,18 @@ if __name__ == "__main__":
 
     server_port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     ws_proxy_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8081
+    max_submissions = int(sys.argv[3]) if len(sys.argv) > 3 else 3
 
     # Update global variables
     SERVER_PORT = server_port
     WS_PROXY_PORT = ws_proxy_port
+    MAX_SUBMISSIONS_PER_IP = max_submissions
+
+    # Format rate limit message
+    if MAX_SUBMISSIONS_PER_IP == -1:
+        rate_limit_msg = "Unlimited (no rate limiting)"
+    else:
+        rate_limit_msg = f"{MAX_SUBMISSIONS_PER_IP} per {RATE_LIMIT_HOURS} hours"
 
     print(f"""
 {'='*60}
@@ -572,7 +989,7 @@ Toolathlon Remote Evaluation Server
 {'='*60}
 Server Port: {server_port}
 WebSocket Proxy Port: {ws_proxy_port} (for private mode)
-Max tasks per IP: {MAX_SUBMISSIONS_PER_IP} per {RATE_LIMIT_HOURS} hours
+Max tasks per IP: {rate_limit_msg}
 Timeout: {TIMEOUT_SECONDS//60} minutes
 Output directory: {DUMPS_DIR}
 {'='*60}

@@ -17,9 +17,6 @@
 
 task="finalpool/find-alita-paper"
 
-export TOOLATHLON_OPENAI_API_KEY="xxx"
-export TOOLATHLON_OPENAI_BASE_URL="xxx"
-
 #### after you have do the full praparation, you can switch to any task under `tasks/finalpool`, the format be like `finalpool/{taskname}`
 
 # for the model_short_name here we use the claude sonnet 4.5 model ID from OpenRouter

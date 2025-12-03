@@ -87,6 +87,17 @@ if [ ! -z "${TOOLATHLON_OPENAI_API_KEY+x}" ]; then
     EXTRA_ENV_ARGS+=("-e" "TOOLATHLON_OPENAI_API_KEY=${TOOLATHLON_OPENAI_API_KEY}")
     echo "Detected host TOOLATHLON_OPENAI_API_KEY, will pass into container"
 fi
+
+# Detect TOOLATHLON_MODEL_PARAMS_FILE - will copy file and set container path later
+HOST_MODEL_PARAMS_FILE=""
+CONTAINER_MODEL_PARAMS_FILE=""
+if [ ! -z "${TOOLATHLON_MODEL_PARAMS_FILE+x}" ] && [ -f "${TOOLATHLON_MODEL_PARAMS_FILE}" ]; then
+    HOST_MODEL_PARAMS_FILE="${TOOLATHLON_MODEL_PARAMS_FILE}"
+    # Container path will be /workspace/model_params.json
+    CONTAINER_MODEL_PARAMS_FILE="/workspace/model_params.json"
+    echo "Detected host TOOLATHLON_MODEL_PARAMS_FILE: ${HOST_MODEL_PARAMS_FILE}"
+    echo "Will copy to container as: ${CONTAINER_MODEL_PARAMS_FILE}"
+fi
 # --- END: Detect and propagate TOOLATHLON_OPENAI env vars ---
 
 # Cleanup function
@@ -314,6 +325,15 @@ $CONTAINER_RUNTIME cp "$TASK_SOURCE" "$CONTAINER_NAME:/workspace/tasks/$TARGET_P
 
 echo "✓ File copying completed"
 
+# Step 2.5.1: Copy model_params file to container if specified
+if [ ! -z "$HOST_MODEL_PARAMS_FILE" ]; then
+    echo ""
+    echo "Step 2.5.1: Copying model_params file to container..."
+    echo "  Copying ${HOST_MODEL_PARAMS_FILE} to ${CONTAINER_MODEL_PARAMS_FILE}..."
+    $CONTAINER_RUNTIME cp "$HOST_MODEL_PARAMS_FILE" "$CONTAINER_NAME:${CONTAINER_MODEL_PARAMS_FILE}"
+    echo "✓ Model params file copied"
+fi
+
 # Run the necessary configuration commands in the container
 echo ""
 echo "Step 2.6: Executing necessary configurations..."
@@ -370,6 +390,15 @@ fi
 echo ""
 echo "Step 3: Executing task command in container..."
 
+# Build environment variables array for exec command
+EXEC_ENV_ARGS=("--env" "DOCKER_API_VERSION=1.44")
+
+# Add TOOLATHLON_MODEL_PARAMS_FILE if it was copied
+if [ ! -z "$CONTAINER_MODEL_PARAMS_FILE" ]; then
+    EXEC_ENV_ARGS+=("--env" "TOOLATHLON_MODEL_PARAMS_FILE=${CONTAINER_MODEL_PARAMS_FILE}")
+    echo "Setting container env: TOOLATHLON_MODEL_PARAMS_FILE=${CONTAINER_MODEL_PARAMS_FILE}"
+fi
+
 # When running commands in the container, these env variables are already present due to -e at startup.
 
 CONTAINER_CMD="uv run main.py --eval_config $eval_config --task_dir $task_dir_arg --max_steps_under_single_turn_mode $maxstep --model_short_name $modelname --provider $provider --debug > /workspace/logs/$RUN_LOG_FILE_NAME 2>&1"
@@ -389,9 +418,9 @@ echo ""
 # Actually run the task inside the container
 echo "Executing task, please wait for a while ..."
 if [ "$runmode" = "quickstart" ]; then
-    $CONTAINER_RUNTIME exec --env DOCKER_API_VERSION=1.44 -t "$CONTAINER_NAME" bash -c "$CONTAINER_CMD"
+    $CONTAINER_RUNTIME exec "${EXEC_ENV_ARGS[@]}" -t "$CONTAINER_NAME" bash -c "$CONTAINER_CMD"
 else
-    $CONTAINER_RUNTIME exec --env DOCKER_API_VERSION=1.44 "$CONTAINER_NAME" bash -c "$CONTAINER_CMD"
+    $CONTAINER_RUNTIME exec "${EXEC_ENV_ARGS[@]}" "$CONTAINER_NAME" bash -c "$CONTAINER_CMD"
 fi
 EXEC_EXIT_CODE=$?
 

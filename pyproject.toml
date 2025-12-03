@@ -172,4 +172,5 @@ dependencies = [
     "scipy>=1.16.2",
     "fastapi>=0.121.3",
     "websockets>=15.0.1",
+    "typer>=0.16.0",
 ]
