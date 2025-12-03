@@ -228,19 +228,25 @@ pip install fastapi uvicorn websockets
 ### Start Server
 
 ```bash
-python eval_server.py <server_port> <ws_proxy_port>
+python eval_server.py <server_port> <ws_proxy_port> [enable_ip_rate_limit]
 ```
 
-**Default ports:**
-- Server: 8080
-- WebSocket proxy: 8081
+**Arguments:**
+- `server_port`: Server port (default: 8080)
+- `ws_proxy_port`: WebSocket proxy port for private mode (default: 8081)
+- `enable_ip_rate_limit`: Enable IP rate limiting (default: true). Use `false`, `no`, `0`, or `disable` to disable rate limiting.
 
-**Example:**
+**Example with rate limiting (default, for public service):**
 ```bash
 python eval_server.py 8080 8081
 ```
 
-Server output:
+**Example without rate limiting (for private/dedicated service):**
+```bash
+python eval_server.py 8080 8081 false
+```
+
+Server output (with rate limiting):
 ```
 ============================================================
 Toolathlon Remote Evaluation Server
@@ -253,6 +259,19 @@ Output directory: ./dumps_public_service
 ============================================================
 ✓ WebSocket proxy started (PID: 12345)
   Log: ./dumps_public_service/ws_proxy.log
+============================================================
+```
+
+Server output (without rate limiting):
+```
+============================================================
+Toolathlon Remote Evaluation Server
+============================================================
+Server Port: 8080
+WebSocket Proxy Port: 8081 (for private mode)
+IP Rate Limit: DISABLED (no limit)
+Timeout: 240 minutes
+Output directory: ./dumps_public_service
 ============================================================
 ```
 

@@ -3,7 +3,20 @@
 Toolathlon Remote Evaluation Server
 
 This server allows remote clients to submit evaluation tasks.
-Only one task can run at a time, with IP rate limiting (3 tasks per 24 hours).
+Only one task can run at a time. IP rate limiting (3 tasks per 24 hours) can be enabled/disabled.
+
+Usage:
+    python eval_server.py <server_port> <ws_proxy_port> [enable_ip_rate_limit]
+
+Arguments:
+    server_port: Server port (default: 8080)
+    ws_proxy_port: WebSocket proxy port for private mode (default: 8081)
+    enable_ip_rate_limit: Enable IP rate limiting (default: true)
+                          Use "false", "no", "0", or "disable" to disable
+
+Examples:
+    python eval_server.py 8080 8081           # With rate limiting (default)
+    python eval_server.py 8080 8081 false     # Without rate limiting
 """
 
 import asyncio
@@ -42,6 +55,7 @@ RATE_LIMIT_HOURS = 24
 DUMPS_DIR = "./dumps_public_service"
 SERVER_PORT = 8080  # Will be updated in main
 WS_PROXY_PORT = 8081  # Will be updated in main
+ENABLE_IP_RATE_LIMIT = True  # Will be updated in main
 
 # ===== Request/Response Models =====
 
@@ -74,6 +88,10 @@ def check_job_id_exists(job_id: str) -> bool:
 
 def check_ip_rate_limit(ip: str) -> tuple[bool, str]:
     """Check if IP has exceeded rate limit"""
+    # If rate limiting is disabled, always allow
+    if not ENABLE_IP_RATE_LIMIT:
+        return True, ""
+
     now = datetime.now()
     cutoff = now - timedelta(hours=RATE_LIMIT_HOURS)
 
@@ -561,10 +579,17 @@ if __name__ == "__main__":
 
     server_port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     ws_proxy_port = int(sys.argv[2]) if len(sys.argv) > 2 else 8081
+    # Third argument: enable IP rate limiting (default: true)
+    # Use "false", "no", "0", or "disable" to disable rate limiting
+    enable_rate_limit_arg = sys.argv[3].lower() if len(sys.argv) > 3 else "true"
+    enable_rate_limit = enable_rate_limit_arg not in ["false", "no", "0", "disable"]
 
     # Update global variables
     SERVER_PORT = server_port
     WS_PROXY_PORT = ws_proxy_port
+    ENABLE_IP_RATE_LIMIT = enable_rate_limit
+
+    rate_limit_status = f"{MAX_SUBMISSIONS_PER_IP} per {RATE_LIMIT_HOURS} hours" if enable_rate_limit else "DISABLED (no limit)"
 
     print(f"""
 {'='*60}
