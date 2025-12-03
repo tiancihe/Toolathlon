@@ -76,7 +76,7 @@ bash global_preparation/automated_additional_services.sh
 #### Notion Account
 <!-- *This part is largely taken from [MCPMark](https://github.com/eval-sys/mcpmark/blob/main/docs/mcp/notion.md) -->
 
-We recommand register a new notion account and create a new workspace.
+We recommand register a new notion account with your Toolathlon-specific gmail account and create a new workspace.
 
 First run `uv run -m global_preparation.special_setup_notion_official` to connect to the workspace in the above step to the official online notion mcp. This facilates us to duplicate and move pages more efficiently!
 

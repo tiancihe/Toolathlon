@@ -86,26 +86,57 @@ echo ""
 # Get current project
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
 
-# Always ask user to confirm or change project
+# Fetch and display all available projects upfront
+echo "Fetching your Google Cloud projects..."
+PROJECTS=$(gcloud projects list --format="value(projectId)" 2>/dev/null)
+
+echo ""
+echo -e "${BLUE}Available Google Cloud projects:${NC}"
+echo ""
+
+if [ -z "$PROJECTS" ]; then
+    echo -e "  ${YELLOW}(No projects found)${NC}"
+else
+    # Display projects with numbers, marking current project
+    i=1
+    declare -a PROJECT_ARRAY
+    while IFS= read -r proj; do
+        PROJECT_ARRAY[$i]="$proj"
+        if [ "$proj" == "$PROJECT_ID" ]; then
+            echo -e "  $i. ${GREEN}$proj${NC} ${YELLOW}(current)${NC}"
+        else
+            echo "  $i. $proj"
+        fi
+        ((i++))
+    done <<< "$PROJECTS"
+fi
+echo ""
+
+# Show current project status
 if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" == "(unset)" ]; then
     echo -e "${YELLOW}No Google Cloud project is currently set.${NC}"
     echo ""
     HAS_PROJECT=false
 else
-    echo -e "${GREEN}Current Google Cloud project: ${BLUE}$PROJECT_ID${NC}"
+    echo -e "Current project: ${GREEN}$PROJECT_ID${NC}"
     echo ""
     HAS_PROJECT=true
 fi
 
 echo "What would you like to do?"
-echo "  1. Use current project (if set) or enter existing project ID"
-echo "  2. Create a new project"
+if [ "$HAS_PROJECT" = true ]; then
+    echo "  1. Use current project ($PROJECT_ID)"
+else
+    echo -e "  1. ${YELLOW}Use current project (not set)${NC}"
+fi
+echo "  2. Select a different project from the list above"
+echo "  3. Create a new project"
 echo ""
-read -p "Enter choice [1/2]: " -n 1 -r
+read -p "Enter choice [1/2/3]: " -n 1 -r
 echo
 echo ""
 
-if [[ $REPLY == "2" ]]; then
+if [[ $REPLY == "3" ]]; then
     # Create new project
     echo "Creating a new Google Cloud Project..."
     echo ""
@@ -138,8 +169,44 @@ if [[ $REPLY == "2" ]]; then
         echo "The project ID might already exist or be invalid."
         exit 1
     fi
+elif [[ $REPLY == "2" ]]; then
+    # Select from existing projects (already listed above)
+    if [ -z "$PROJECTS" ]; then
+        echo -e "${YELLOW}No existing projects found.${NC}"
+        echo "You may need to create a new project instead."
+        read -p "Enter project ID manually, or press Enter to create a new one: " USER_PROJECT_ID
+        if [ -z "$USER_PROJECT_ID" ]; then
+            # Create new project
+            TIMESTAMP=$(date +%s)
+            PROJECT_ID="toolathlon-eval-${TIMESTAMP}"
+            echo "Creating project: $PROJECT_ID"
+            if gcloud projects create $PROJECT_ID --name="Toolathlon Evaluation" 2>&1; then
+                echo -e "${GREEN}✓ Project created successfully${NC}"
+                gcloud config set project $PROJECT_ID
+            else
+                echo -e "${RED}ERROR: Failed to create project${NC}"
+                exit 1
+            fi
+        else
+            PROJECT_ID=$USER_PROJECT_ID
+            gcloud config set project $PROJECT_ID
+        fi
+    else
+        # Use the PROJECT_ARRAY already populated above
+        read -p "Enter the number of the project to use (or type a project ID): " PROJECT_CHOICE
+
+        # Check if input is a number and within valid range
+        if [[ "$PROJECT_CHOICE" =~ ^[0-9]+$ ]] && [ "$PROJECT_CHOICE" -ge 1 ] && [ -n "${PROJECT_ARRAY[$PROJECT_CHOICE]}" ]; then
+            PROJECT_ID="${PROJECT_ARRAY[$PROJECT_CHOICE]}"
+        else
+            # Assume it's a project ID
+            PROJECT_ID="$PROJECT_CHOICE"
+        fi
+
+        gcloud config set project $PROJECT_ID
+    fi
 else
-    # Use existing project
+    # Use current project (option 1 or default)
     if [ "$HAS_PROJECT" = true ]; then
         read -p "Use current project '$PROJECT_ID'? [Y/n]: " -n 1 -r
         echo
@@ -149,6 +216,7 @@ else
             gcloud config set project $PROJECT_ID
         fi
     else
+        echo -e "${YELLOW}No current project set. Please enter a project ID or choose option 2 or 3.${NC}"
         read -p "Enter project ID to use: " USER_PROJECT_ID
         PROJECT_ID=$USER_PROJECT_ID
         gcloud config set project $PROJECT_ID
@@ -169,7 +237,7 @@ echo -e "${YELLOW}Checking billing status...${NC}"
 BILLING_ACCOUNT=$(gcloud billing projects describe $PROJECT_ID --format="value(billingAccountName)" 2>/dev/null)
 
 if [ -z "$BILLING_ACCOUNT" ] || [ "$BILLING_ACCOUNT" == "" ]; then
-    echo -e "${RED}⚠️  No billing account linked to this project!${NC}"
+    echo -e "${RED}⚠️  No billing abash global_preparation/automated_google_setup.shccount linked to this project!${NC}"
     echo ""
     echo "Many Google Cloud APIs require billing to be enabled."
     echo "You need to link a billing account to this project."
@@ -368,79 +436,71 @@ if [ -n "$EXISTING_KEY" ]; then
 else
     echo "Creating new API key..."
 
-    # Create API key and get the full response (includes operation name)
+    # Create API key - gcloud waits for completion by default and returns the key resource
+    # The command outputs progress to stderr and the final JSON result to stdout
     CREATE_OUTPUT=$(gcloud services api-keys create \
         --display-name="$API_KEY_DISPLAY_NAME" \
         --project=$PROJECT_ID \
-        --format="json")
+        --format="json" 2>&1)
 
-    # Extract the operation name and key resource name
-    OPERATION_NAME=$(echo "$CREATE_OUTPUT" | uv run python -c "import sys, json; data=json.load(sys.stdin); print(data.get('name', ''))")
+    # Check if creation was successful by looking for the key resource name
+    # The response should contain "name": "projects/.../locations/global/keys/..."
+    # Note: Output may contain multiple JSON objects (one from stderr "Result:", one from --format="json")
+    API_KEY_RESOURCE=$(echo "$CREATE_OUTPUT" | uv run python -c "
+import sys, json, re
 
-    if [[ "$OPERATION_NAME" == operations/* ]]; then
-        echo "Waiting for API key creation to complete..."
+input_text = sys.stdin.read()
 
-        # Wait for operation to complete (up to 3 minutes)
-        for i in {1..180}; do
-            sleep 1
+# Find all JSON objects in the output (there may be multiple)
+# Use non-greedy matching to find individual JSON objects
+json_objects = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', input_text)
 
-            # Show progress every 15 seconds
-            if [ $((i % 15)) -eq 0 ]; then
-                echo "  Still waiting... (${i}s / 180s)"
-            fi
+result = ''
+for json_str in json_objects:
+    try:
+        data = json.loads(json_str)
+        # Look for keyString directly in the object or in response.keyString
+        if data.get('keyString'):
+            result = 'DIRECT_KEY:' + data.get('keyString')
+            break
+        elif data.get('response', {}).get('keyString'):
+            result = 'DIRECT_KEY:' + data.get('response', {}).get('keyString')
+            break
+        # Or look for key resource name
+        name = data.get('name', '')
+        if '/keys/' in name:
+            result = name
+            break
+        # Check in response.name
+        resp_name = data.get('response', {}).get('name', '')
+        if '/keys/' in resp_name:
+            result = resp_name
+            break
+    except json.JSONDecodeError:
+        continue
 
-            # Check operation status
-            OP_STATUS=$(gcloud services operations describe "$OPERATION_NAME" --format="json" 2>&1)
-            OP_EXIT_CODE=$?
+print(result)
+")
 
-            # If gcloud command failed, retry unless we're near timeout
-            if [ $OP_EXIT_CODE -ne 0 ]; then
-                if [ $i -ge 170 ]; then
-                    echo -e "${RED}ERROR: gcloud command failed${NC}"
-                    echo "$OP_STATUS"
-                    exit 1
-                fi
-                continue
-            fi
-
-            if echo "$OP_STATUS" | grep -q '"done": true'; then
-                # Operation complete, extract the key resource name
-                API_KEY_RESOURCE=$(echo "$OP_STATUS" | uv run python -c "import sys, json; data=json.load(sys.stdin); print(data.get('response', {}).get('name', ''))")
-
-                if [ -n "$API_KEY_RESOURCE" ]; then
-                    echo -e "${GREEN}✓ API key created (took ${i}s)${NC}"
-                    break
-                else
-                    # Operation done but no resource - this shouldn't happen
-                    echo -e "${RED}ERROR: Operation completed but could not extract API key resource${NC}"
-                    echo "Operation response: $OP_STATUS"
-                    exit 1
-                fi
-            fi
-
-            if [ $i -eq 180 ]; then
-                echo -e "${RED}ERROR: API key creation timed out after 180 seconds${NC}"
-                echo -e "${YELLOW}Note: The API key might still be created in the background.${NC}"
-                echo -e "${YELLOW}Try running this script again in a minute.${NC}"
-                exit 1
-            fi
-        done
-    else
-        # If not an operation, use the name directly (older gcloud versions)
-        API_KEY_RESOURCE=$(echo "$CREATE_OUTPUT" | uv run python -c "import sys, json; data=json.load(sys.stdin); print(data.get('name', ''))")
+    if [ -z "$API_KEY_RESOURCE" ]; then
+        echo -e "${RED}ERROR: Could not extract API key resource from response${NC}"
+        echo "Response was: $CREATE_OUTPUT"
+        exit 1
     fi
 
-    # Now get the actual key string
-    if [ -n "$API_KEY_RESOURCE" ]; then
+    # Check if we got the key directly
+    if [[ "$API_KEY_RESOURCE" == DIRECT_KEY:* ]]; then
+        API_KEY="${API_KEY_RESOURCE#DIRECT_KEY:}"
+        echo -e "${GREEN}✓ API key created${NC}"
+    else
+        # Get the actual key string using the resource name
+        echo -e "${GREEN}✓ API key created${NC}"
         API_KEY=$(gcloud services api-keys get-key-string "$API_KEY_RESOURCE" --format="value(keyString)")
 
         if [ -z "$API_KEY" ]; then
             echo -e "${RED}ERROR: Could not retrieve API key string${NC}"
             exit 1
         fi
-    else
-        echo -e "${RED}ERROR: Could not get API key resource name${NC}"
-        exit 1
     fi
 fi
 

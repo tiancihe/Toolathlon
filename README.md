@@ -151,7 +151,7 @@ bash global_preparation/check_installation_containerized.sh
 We use the same script `scripts/run_single_containerized.sh` to run any task, just simply switch to another task in the input arguments:
 
 ```
-bash scripts/run_single_containerized.sh finalpool/{taskname} normal {your_dump_path} {model-name}
+bash scripts/run_single_containerized.sh finalpool/{taskname} quickstart {your_dump_path} {model-name}
 ```
 
 *Note: There are also other arguments in the script, please take a look at the head of it if for more information. The model name should be exactly the same as the raw name from the provider if you use **unified** model provider, otherwise, please use the alias we preset, see `utils/api_model/model_provider.py` for more details.
