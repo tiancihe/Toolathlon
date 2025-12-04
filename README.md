@@ -36,15 +36,12 @@ We provide Toolathlon evaluation as a service on public servers, where we have s
 ```bash
 python eval_client.py run \
   --mode public \
-  --base-url your-puclic-endpoint \
-  --api-key sk-your-key \
-  --model-name your-model-name \
-  --workers 10 \
-  --output-file ./results/eval_stats.json \
-  --log-file ./results/client.log \
-  --server-log ./results/server.log \
-  --traj-log ./results/traj_log_all.jsonl \
+  --base-url https://api.openai.com/v1 \
+  --model-name gpt-5 \
+  --output-dir ./results \
   --server-host 47.253.6.47 \
+  --api-key sk-your-api-key \
+  --workers 10 \
   --server-port 8080
 ```
 
