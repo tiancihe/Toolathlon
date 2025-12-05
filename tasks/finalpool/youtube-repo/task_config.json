@@ -1,13 +1,15 @@
 {
   "id": "youtube-repo",
   "needed_mcp_servers": [
-    "playwright_with_chunk",
     "youtube",
     "youtube-transcript",
-    "filesystem"
+    "filesystem",
+    "fetch",
+    "github"
   ],
   "meta": {},
   "needed_local_tools": [
+    "web_search",
     "claim_done",
     "handle_overlong_tool_outputs",
     "manage_context",
