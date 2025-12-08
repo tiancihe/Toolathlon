@@ -179,15 +179,15 @@ def anonymize_file_content(file_path: Path, sensitive_values: Dict[str, str]) ->
     Returns anonymized content as string, or None if binary file.
     """
     try:
-        # Try to read as text
-        with open(file_path, 'r', encoding='utf-8') as f:
+        # Try to read as text, replacing invalid UTF-8 bytes
+        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
 
         # Anonymize
         return anonymize_content(content, sensitive_values)
 
-    except (UnicodeDecodeError, Exception):
-        # Binary file or read error, return None
+    except Exception:
+        # Read error, return None
         return None
 
 def anonymize_directory(source_dir: Path, temp_dir: Path, sensitive_values: Dict[str, str]):
@@ -782,7 +782,8 @@ async def poll_job_status(job_id: str):
         eval_stats_file = job_dir / "eval_stats.json"
 
         if eval_stats_file.exists():
-            with open(eval_stats_file, 'r') as f:
+            # Use errors='replace' to handle non-UTF-8 bytes gracefully
+            with open(eval_stats_file, 'r', encoding='utf-8', errors='replace') as f:
                 eval_stats_content = f.read()
 
             # Anonymize eval_stats
@@ -793,7 +794,8 @@ async def poll_job_status(job_id: str):
             traj_log_file = job_dir / "traj_log_all.jsonl"
             traj_log_all = None
             if traj_log_file.exists():
-                with open(traj_log_file, 'r') as f:
+                # Use errors='replace' to handle non-UTF-8 bytes gracefully
+                with open(traj_log_file, 'r', encoding='utf-8', errors='replace') as f:
                     traj_log_content = f.read()
                 # Anonymize traj_log
                 traj_log_all = anonymize_content(traj_log_content, sensitive_values)
@@ -848,7 +850,8 @@ async def get_server_log(job_id: str, offset: int = 0):
     sensitive_values = load_sensitive_values()
 
     try:
-        with open(log_file, 'r') as f:
+        # Use errors='replace' to handle non-UTF-8 bytes gracefully
+        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
             f.seek(offset)
             new_content = f.read()
             new_offset = f.tell()
@@ -1111,7 +1114,8 @@ async def get_static_files(job_id: str):
         file_path = job_dir / filename
         if file_path.exists():
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
+                # Use errors='replace' to handle non-UTF-8 bytes gracefully
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read()
 
                 # Anonymize content
@@ -1127,7 +1131,8 @@ async def get_static_files(job_id: str):
     # Read and anonymize execution reports
     for report_path in execution_reports:
         try:
-            with open(report_path, 'r', encoding='utf-8') as f:
+            # Use errors='replace' to handle non-UTF-8 bytes gracefully
+            with open(report_path, 'r', encoding='utf-8', errors='replace') as f:
                 content = f.read()
 
             # Anonymize content
