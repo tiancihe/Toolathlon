@@ -108,7 +108,9 @@ tool_python_execute = FunctionTool(
                 "description": "Maximum execution time in seconds. Cannot exceed 120 seconds. If a value greater than 120 is provided, it will be automatically limited to 120 seconds. Default is 30 seconds."
             }
         },
-        "required": ["code"]
+        "required": ["code"],
+        "additionalProperties": False   
     },
-    on_invoke_tool=on_python_execute_tool_invoke
+    on_invoke_tool=on_python_execute_tool_invoke,
+    strict_json_schema=False
 )

@@ -5,12 +5,13 @@ import json
 from agents import (
     ModelProvider,
     OpenAIChatCompletionsModel,
+    OpenAIResponsesModel,
     Model,
     set_tracing_disabled,
     _debug
 )
 from openai import AsyncOpenAI
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
@@ -28,6 +29,7 @@ from typing import List, Union
 from typing_extensions import Literal, Annotated, TypeAlias
 from openai._utils import PropertyInfo
 
+from pprint import pprint
 
 class ResponseOutputReasoningContent(BaseModel):
     reasoning_content: str | None
@@ -451,7 +453,7 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                 f"Response format: {response_format}\n"
             )
 
-        reasoning_effort = model_settings.reasoning.effort if model_settings.reasoning else None
+        reasoning_effort = model_settings.reasoning.get("effort") if isinstance(model_settings.reasoning, Dict) else (model_settings.reasoning.get("effort") if model_settings.reasoning else None)
         store = ChatCmplHelpers.get_store_param(self._get_client(), model_settings)
 
         stream_options = ChatCmplHelpers.get_stream_options_param(
@@ -782,6 +784,90 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                 
                 await asyncio.sleep(self.retry_delay)
 
+
+class OpenAIResponsesModelWithRetry(OpenAIResponsesModel):
+    def __init__(self, model: str, 
+                 openai_client: AsyncOpenAI, 
+                 retry_times: int = 5, # FIXME: hardcoded now, should be dynamic
+                 retry_delay: float = 5.0,
+                 debug: bool = True,
+                 short_model_name: str | None = None): # FIXME: hardcoded now, should be dynamic
+        super().__init__(model=model, openai_client=openai_client)
+        self.retry_times = retry_times
+        self.retry_delay = retry_delay
+        self.debug = debug
+        self.short_model_name = short_model_name
+
+    async def get_response(self, *args, **kwargs):
+        for i in range(self.retry_times):
+            try:
+                model_response = await super().get_response(*args, **kwargs)
+                output_items = model_response.output
+                if self.debug:
+                    for item in output_items:
+                        if isinstance(item, ResponseReasoningItem):
+                            if item.summary and len(item.summary) > 0:
+                                summary_text = "\n----------------------\n".join([s.text.strip() for s in item.summary])
+                                print("\033[90mTHINKING SUMMARY: ", summary_text, "\033[0m")
+                            else:
+                                print("\033[90mTHINKING: (Thinking implicitly ...) \033[0m")
+                        elif isinstance(item, ResponseOutputMessage):
+                            if item.content and len(item.content) > 0:
+                                print("ASSISTANT: ", item.content[0].text.strip())
+                return model_response
+            except Exception as e:
+                error_str = str(e)       
+                # Detect various forms of context too long errors
+                context_too_long = False
+                current_tokens, max_tokens = None, None
+                
+                # 1. Check if error code is 400 (usually means bad request)
+                if "Error code: 400" in error_str:
+                    # Directly search for keywords in error string
+                    lower_error = error_str.lower()
+                    if any(pattern in lower_error for pattern in [
+                        'maximum context length is',
+                        'exceeds the context window',
+                    ]):
+                        context_too_long = True
+                        
+                        # Try to extract token numbers from message
+                        # Pattern 1: "maximum context length is 400000 tokens. However, you requested about 482984 tokens" -- for openrouter responses, thought we should abort it
+                        match = re.search(r'maximum context length is (\d+) tokens. however, you requested about (\d+) tokens', error_str)
+                        if match:
+                            max_tokens, current_tokens = int(match.group(1)), int(match.group(2))
+                
+                # If context too long detected, do not retry, raise
+                if context_too_long:
+                    if self.debug:
+                        print(f"Context too long detected: {error_str}")
+                    
+                    # Create more detailed error message
+                    error_msg = f"Context too long: {error_str}"
+
+                    if current_tokens and max_tokens:
+                        error_msg = f"Context too long: current={current_tokens} tokens, max={max_tokens} tokens. Original error: {error_str}"
+                    elif max_tokens:
+                        error_msg = f"Context too long: exceeds maximum of {max_tokens} tokens. Original error: {error_str}"
+                    
+                    raise ContextTooLongError(
+                        error_msg,
+                        token_count=current_tokens,
+                        max_tokens=max_tokens
+                    )
+                
+                # For other errors: continue retry logic
+                if self.debug:
+                    # import traceback
+                    # traceback.print_exc()
+                    print(f"Error in get_response: {e}, retry {i+1}/{self.retry_times}, waiting {self.retry_delay} seconds...")
+                
+                # Raise if it's the last try
+                if i == self.retry_times - 1:
+                    raise Exception(f"Failed to get response after {self.retry_times} retries, error: {e}")
+                
+                await asyncio.sleep(self.retry_delay)
+
 class CustomModelProviderAiHubMix(ModelProvider):
     def get_model(self, model_name: str | None, debug: bool = True, short_model_name: str | None = None) -> Model:
         client = AsyncOpenAI(
@@ -901,6 +987,22 @@ class CustomModelProviderUnified(ModelProvider):
                                                    debug=debug,
                                                    short_model_name=short_model_name)
 
+class CustomModelProviderOpenAIStatefulResponses(ModelProvider):
+    def get_model(self, model_name: str | None, debug: bool = True, short_model_name: str | None = None) -> Model:
+        import os
+        base_url = os.getenv('TOOLATHLON_OPENAI_BASE_URL', None)
+        if base_url is None:
+            raise ValueError("TOOLATHLON_OPENAI_BASE_URL is not set! You must set it in the environment variables when using unified model provider!")
+        api_key = os.getenv('TOOLATHLON_OPENAI_API_KEY', "fake-key")
+        if api_key == "fake-key":
+            print("[Warning] TOOLATHLON_OPENAI_API_KEY is not set! Usually this is only expected when you are running some self-deployed models like via vllm or sglang!")
+        client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        )
+        return OpenAIResponsesModelWithRetry(model=model_name, openai_client=client,
+                                             debug=debug, short_model_name=short_model_name)
+
 model_provider_mapping = {
     "aihubmix": CustomModelProviderAiHubMix,
     "anthropic": CustomModelProviderAnthropic,
@@ -912,6 +1014,7 @@ model_provider_mapping = {
     "google": CustomModelProviderGoogle,
     "xai": CustomModelProviderXAI,
     "unified": CustomModelProviderUnified,
+    "openai_stateful_responses": CustomModelProviderOpenAIStatefulResponses,
 }
 
 API_MAPPINGS = {
@@ -1159,8 +1262,12 @@ def calculate_cost(model_name, input_tokens, output_tokens):
     
     return input_cost, output_cost, total_cost
 
-def get_context_window(model_name):
+def get_context_window(model_name, context_window = None):
     # For local VLLM models, assume a reasonable default context window
+    if context_window is not None:
+        # if this model has a specific context window, return it
+        return context_window
+    
     if model_name not in API_MAPPINGS:
         return 128000  # Default context window for local models
     

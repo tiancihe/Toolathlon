@@ -22,9 +22,11 @@ tool_sleep = FunctionTool(
                 "description": 'the number of seconds to sleep',
             },
         },
-        "required": ["seconds"]
+        "required": ["seconds"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_sleep_tool_invoke
+    on_invoke_tool=on_sleep_tool_invoke,
+    strict_json_schema=False
 )
 
 async def on_done_tool_invoke(context: RunContextWrapper, params_str: str) -> Any:
@@ -37,8 +39,10 @@ tool_done = FunctionTool(
         "type": "object",
         "properties": {
         },
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_done_tool_invoke
+    on_invoke_tool=on_done_tool_invoke,
+    strict_json_schema=False
 )
 
 if __name__ == "__main__":

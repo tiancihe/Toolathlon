@@ -468,9 +468,11 @@ tool_search_overlong = FunctionTool(
                 "maximum": 5000
             }
         },
-        "required": ["shortuuid", "pattern"]
+        "required": ["shortuuid", "pattern"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_search_overlong_tool_invoke
+    on_invoke_tool=on_search_overlong_tool_invoke,
+    strict_json_schema=False
 )
 
 tool_search_navigate = FunctionTool(
@@ -494,9 +496,11 @@ tool_search_navigate = FunctionTool(
                 "minimum": 1
             }
         },
-        "required": ["search_session_id"]
+        "required": ["search_session_id"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_search_navigate_invoke
+    on_invoke_tool=on_search_navigate_invoke,
+    strict_json_schema=False
 )
 
 tool_view_overlong = FunctionTool(
@@ -516,9 +520,11 @@ tool_view_overlong = FunctionTool(
                 "maximum": MAX_VIEW_PAGE_SIZE
             }
         },
-        "required": ["shortuuid"]
+        "required": ["shortuuid"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_view_overlong_tool_invoke
+    on_invoke_tool=on_view_overlong_tool_invoke,
+    strict_json_schema=False
 )
 
 tool_view_navigate = FunctionTool(
@@ -542,9 +548,11 @@ tool_view_navigate = FunctionTool(
                 "minimum": 1
             }
         },
-        "required": ["view_session_id"]
+        "required": ["view_session_id"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_view_navigate_invoke
+    on_invoke_tool=on_view_navigate_invoke,
+    strict_json_schema=False
 )
 
 overlong_tool_tools = [

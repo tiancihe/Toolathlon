@@ -23,7 +23,7 @@ from agents import (
 
 from agents.exceptions import MaxTurnsExceeded
 
-from utils.roles.context_managed_runner import ContextManagedRunner
+from utils.roles.context_managed_runner import ContextManagedRunner, _ServerConversationTracker
 from utils.api_model.model_provider import ContextTooLongError
 
 from utils.mcp.tool_servers import MCPServerManager
@@ -428,12 +428,9 @@ class TaskAgent:
             tools=local_tools,
             hooks=self.agent_hooks,
             model_settings=ModelSettings(
-                temperature=self.agent_config.generation.temperature,
-                top_p=self.agent_config.generation.top_p,
-                max_tokens=self.agent_config.generation.max_tokens,
                 tool_choice=self.agent_config.tool.tool_choice,
                 parallel_tool_calls=self.agent_config.tool.parallel_tool_calls,
-                extra_body=self.agent_config.generation.extra_body,
+                **{k: getattr(self.agent_config.generation, k) for k in vars(self.agent_config.generation)},
             ),
         )
         
@@ -498,7 +495,15 @@ class TaskAgent:
         # Use a fixed session_id
         self.session_id = f"task_{self.task_config.id}_session"
         self.history_dir = os.path.join(abs_original_task_root, "conversation_history")
-        
+
+        # we need a condition here, only when we use `openai_stateful_responses` as the provider we set
+        if self.agent_config.model.provider == "openai_stateful_responses":
+            server_conversation_tracker = _ServerConversationTracker(
+                auto_previous_response_id=True,
+            )
+        else:
+            server_conversation_tracker = None
+
         # Initialize chat logs
         self.logs = []
         
@@ -507,6 +512,7 @@ class TaskAgent:
             "_agent_workspace": self.task_config.agent_workspace,
             "_session_id": self.session_id,
             "_history_dir": self.history_dir,
+            "_server_conversation_tracker": server_conversation_tracker,
             "_context_meta": {
                 "session_id": self.session_id,
                 "history_dir": self.history_dir,
@@ -519,7 +525,8 @@ class TaskAgent:
                 "truncated_turns": 0,
                 "truncation_history": []
             },
-            "_context_limit": get_context_window(self.agent_config.model.short_name)
+            "_context_limit": get_context_window(model_name=self.agent_config.model.short_name,
+                                                context_window=self.agent_config.model.context_window)
         }
 
         # Attempt load from checkpoint if allowed
@@ -656,6 +663,11 @@ class TaskAgent:
 
                         # Reset context & history
                         self._reset_context_and_history()
+
+                        # Reset server conversation tracker if necessary
+                        if server_conversation_tracker is not None:
+                            # it should have been put in the shared_context in previous codes
+                            server_conversation_tracker.reset()
                         
                         # Get recent history summary from ContextManagedRunner
                         history_summary = ContextManagedRunner.get_recent_turns_summary(
@@ -713,7 +725,7 @@ class TaskAgent:
                     self.usage.add(raw_response.usage)
                     self.stats["agent_llm_requests"] += 1
 
-                self.logs = self.build_new_logs(result.input, result.new_items)
+                self.logs = self.build_new_logs(result.input, result.new_items, server_conversation_tracker)
                 
                 self.user_simulator.receive_message(result.final_output)
                 
@@ -748,9 +760,12 @@ class TaskAgent:
             self._debug_print(f"Maximum turns ({self.task_config.max_turns}) reached")
             self.task_status = TaskStatus.MAX_TURNS_REACHED
 
-    def build_new_logs(self, input, generated_items):
-        input_items = ItemHelpers.input_to_new_input_list(input)
-        input_items.extend([generated_item.to_input_item() for generated_item in generated_items])
+    def build_new_logs(self, input, generated_items, server_conversation_tracker=None):
+        if server_conversation_tracker is not None:
+            input_items = server_conversation_tracker.prepare_input(input, generated_items)
+        else:
+            input_items = ItemHelpers.input_to_new_input_list(input)
+            input_items.extend([generated_item.to_input_item() for generated_item in generated_items])
         return input_items
 
     def get_cost_summary(self) -> Tuple[Dict, Dict]:

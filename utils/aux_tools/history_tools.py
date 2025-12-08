@@ -591,6 +591,11 @@ async def on_browse_history_invoke(context: RunContextWrapper, params_str: str) 
         }
         
         for record in turn_records:
+            if record.get("type") == "user_input":
+                turn_summary["messages"].append({
+                    "type": "user_input",
+                    "content": record.get("content", "unknown")
+                })
             if record.get("item_type") == "message_output_item":
                 raw_content = record.get("raw_content", {})
                 role = "unknown"
@@ -697,9 +702,11 @@ tool_search_history = FunctionTool(
                 "description": "Continue previous search (for paging)"
             }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_search_history_invoke
+    on_invoke_tool=on_search_history_invoke,
+    strict_json_schema=False
 )
 
 tool_view_history_turn = FunctionTool(
@@ -726,9 +733,11 @@ tool_view_history_turn = FunctionTool(
                 "default": True
             }
         },
-        "required": ["turn"]
+        "required": ["turn"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_view_history_turn_invoke
+    on_invoke_tool=on_view_history_turn_invoke,
+    strict_json_schema=False
 )
 
 tool_search_in_turn = FunctionTool(
@@ -777,9 +786,11 @@ tool_search_in_turn = FunctionTool(
                 "description": "Jump to: 'first'(first page), 'last'(last page), 'next'(next page), 'prev'(previous page), or specific page number"
             }
         },
-        "required": ["turn"]
+        "required": ["turn"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_search_in_turn_invoke
+    on_invoke_tool=on_search_in_turn_invoke,
+    strict_json_schema=False
 )
 
 tool_browse_history = FunctionTool(
@@ -817,9 +828,11 @@ tool_browse_history = FunctionTool(
                 "default": True
             }
         },
-        "required": []
+        "required": [],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_browse_history_invoke
+    on_invoke_tool=on_browse_history_invoke,
+    strict_json_schema=False
 )
 
 tool_history_stats = FunctionTool(
@@ -828,9 +841,11 @@ tool_history_stats = FunctionTool(
     params_json_schema={
         "type": "object",
         "properties": {},
-        "required": []
+        "required": [],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_history_stats_invoke
+    on_invoke_tool=on_history_stats_invoke,
+    strict_json_schema=False
 )
 
 # Export all history tools

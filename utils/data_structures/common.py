@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Optional, Union, Literal, Dict
+
+from openai._types import Body, Headers, Query
+from openai.types.shared import Reasoning
+
 from utils.api_model.model_provider import API_MAPPINGS
 
 @dataclass
@@ -8,12 +12,13 @@ class Model:
     short_name: str
     provider: str
     real_name: Optional[str] = None
+    context_window: Optional[int] = None
     
     def __post_init__(self):
         """By default, use short_name as real_name if not provided"""
         if self.real_name is None:
             # For local VLLM provider, use the model name as-is without mapping
-            if self.provider in ["local_vllm", "unified"]:
+            if self.provider in ["local_vllm", "unified", "openai_stateful_responses"]:
                 self.real_name = self.short_name
             else:
                 self.real_name = API_MAPPINGS[self.short_name].api_model[self.provider]
@@ -23,18 +28,27 @@ class Model:
 @dataclass
 class Generation:
     """Generation parameter configuration"""
-    temperature: float = 0.0
-    top_p: float = 1.0
-    max_tokens: int = 4096
-    extra_body: Optional[Dict] = None
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    max_tokens: Optional[int] = None
+
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    truncation: Optional[Literal["auto", "disabled"]] = None
+    extra_headers: Optional[Headers] = None
+    extra_query: Optional[Query] = None
+    store: Optional[bool] = None
+    reasoning: Optional[Reasoning] = None
+    metadata: Optional[dict[str, str]] = None
+    extra_body: Optional[Body] = None
     
     def __post_init__(self):
         """Validate the reasonableness of generation parameters"""
-        if not 0 <= self.temperature <= 2:
+        if self.temperature is not None and not 0 <= self.temperature <= 2:
             raise ValueError(f"temperature should be between 0 and 2, but got {self.temperature}")
         
-        if not 0 < self.top_p <= 1:
+        if self.top_p is not None and not 0 < self.top_p <= 1:
             raise ValueError(f"top_p should be between 0 and 1, but got {self.top_p}")
         
-        if self.max_tokens < 1:
+        if self.max_tokens is not None and self.max_tokens < 1:
             raise ValueError(f"max_tokens should be greater than 0, but got {self.max_tokens}")

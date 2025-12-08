@@ -95,9 +95,11 @@ tool_check_context = FunctionTool(
     params_json_schema={
         "type": "object",
         "properties": {},
-        "required": []
+        "required": [],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_check_context_status_invoke
+    on_invoke_tool=on_check_context_status_invoke,
+    strict_json_schema=False
 )
 
 async def on_manage_context_invoke(context: RunContextWrapper, params_str: str) -> Any:
@@ -215,9 +217,11 @@ tool_manage_context = FunctionTool(
                 "default": True
             }
         },
-        "required": ["method", "value"]
+        "required": ["method", "value"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_manage_context_invoke
+    on_invoke_tool=on_manage_context_invoke,
+    strict_json_schema=False
 )
 
 async def on_smart_context_truncate_invoke(context: RunContextWrapper, params_str: str) -> Any:
@@ -365,9 +369,11 @@ Indexing starts from 0, ranges cannot overlap, must be arranged in order.''',
                 "default": True
             }
         },
-        "required": ["ranges"]
+        "required": ["ranges"],
+        "additionalProperties": False 
     },
-    on_invoke_tool=on_smart_context_truncate_invoke
+    on_invoke_tool=on_smart_context_truncate_invoke,
+    strict_json_schema=False
 )
 
 # Export tool list

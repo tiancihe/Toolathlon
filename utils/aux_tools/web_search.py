@@ -330,7 +330,9 @@ tool_web_search = FunctionTool(
                 "maximum": 50
             }
         },
-        "required": ["query"]
+        "required": ["query"],
+        "additionalProperties": False,
     },
-    on_invoke_tool=on_web_search_tool_invoke
+    on_invoke_tool=on_web_search_tool_invoke,
+    strict_json_schema=False
 )

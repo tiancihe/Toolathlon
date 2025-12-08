@@ -1,17 +1,83 @@
 # context_managed_runner.py (English version)
 import json
+import asyncio
 from typing import Dict, Any, List, Union, Optional
 from datetime import datetime
 from pathlib import Path
 
 from agents import Runner, RunConfig, RunHooks, Agent, RunResult
-from agents.run_context import RunContextWrapper
+from agents.run_context import RunContextWrapper, TContext
 from agents.items import (
     RunItem, TResponseInputItem, MessageOutputItem, 
-    ToolCallItem, ToolCallOutputItem, ItemHelpers
+    ToolCallItem, ToolCallOutputItem, ItemHelpers,
+    ModelResponse
 )
+from agents.tool import Tool
+from agents._run_impl import AgentToolUseTracker, SingleStepResult
+
+
+from dataclasses import dataclass, field
+
 from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from utils.api_model.model_provider import ContextTooLongError
+from agents.util import _coro
+
+
+# This is cirectly copied from agents/run.py in new version of openai-agents-sdk library
+@dataclass
+class _ServerConversationTracker:
+    """Tracks server-side conversation state for either conversation_id or
+    previous_response_id modes.
+
+    Note: When auto_previous_response_id=True is used, response chaining is enabled
+    automatically for the first turn, even when there's no actual previous response ID yet.
+    """
+
+    previous_response_id: str | None = None
+    auto_previous_response_id: bool = False
+    sent_items: set[int] = field(default_factory=set)
+    server_items: set[int] = field(default_factory=set)
+
+    def track_server_items(self, model_response: ModelResponse) -> None:
+        for output_item in model_response.output:
+            self.server_items.add(id(output_item))
+
+        # Update previous_response_id when using previous_response_id mode or auto mode
+        if (
+            (self.previous_response_id is not None or self.auto_previous_response_id)
+            and model_response.response_id is not None
+        ):
+            self.previous_response_id = model_response.response_id
+
+    def reset(self,):
+        # we use this when we encounter a context too long error
+        # in this case, the state of this tracker should be completely reset
+        self.previous_response_id = None
+        self.sent_items = set()
+        self.server_items = set()
+
+    def prepare_input(
+        self,
+        original_input: str | list[TResponseInputItem],
+        generated_items: list[RunItem],
+    ) -> list[TResponseInputItem]:
+        input_items: list[TResponseInputItem] = []
+
+        # On first call (when there are no generated items yet), include the original input
+        if not generated_items:
+            input_items.extend(ItemHelpers.input_to_new_input_list(original_input))
+
+        # Process generated_items, skip items already sent or from server
+        for item in generated_items:
+            raw_item_id = id(item.raw_item)
+
+            if raw_item_id in self.sent_items or raw_item_id in self.server_items:
+                continue
+            input_items.append(item.to_input_item())
+            self.sent_items.add(raw_item_id)
+
+        return input_items
+
 
 class ContextManagedRunner(Runner):
     """A Runner that supports context management and history recording."""
@@ -31,7 +97,7 @@ class ContextManagedRunner(Runner):
         run_config: RunConfig | None = None,
         previous_response_id: str | None = None,
         history_dir: Union[str, Path, None] = None,  # newly added parameter
-        session_id: Optional[str] = None,  # allow specifying session_id
+        session_id: Optional[str] = None,  # allow specifying session_id,
     ) -> RunResult:
         """Override the run method to add context management functionality.
         
@@ -141,15 +207,22 @@ class ContextManagedRunner(Runner):
         return context
 
     @classmethod
-    async def _run_single_turn(cls, **kwargs):
+    async def _run_single_turn(
+        cls,
+        *,
+        agent: Agent[TContext],
+        all_tools: list[Tool],
+        original_input: str | list[TResponseInputItem],
+        generated_items: list[RunItem],
+        hooks: RunHooks[TContext],
+        context_wrapper: RunContextWrapper[TContext],
+        run_config: RunConfig,
+        should_run_agent_start_hooks: bool,
+        tool_use_tracker: AgentToolUseTracker,
+        previous_response_id: str | None,
+    ) -> SingleStepResult:
         # print('----IN-----')
         """Override single step execution, add history saving and truncation checking."""
-        
-        # Get context_wrapper
-        context_wrapper = kwargs.get('context_wrapper')
-        original_input = kwargs.get('original_input')
-        generated_items = kwargs.get('generated_items', [])
-        agent = kwargs.get('agent')
 
         # context_wrapper.context is our data storage
         ctx = context_wrapper.context if context_wrapper and hasattr(context_wrapper, 'context') else {}
@@ -180,11 +253,17 @@ class ContextManagedRunner(Runner):
             #     ctx["_context_limit"] = 128000
         # print("Model:", model_name, "context window", ctx["_context_limit"])
 
+        # Get server conversation tracker and previous response id
+        server_conversation_tracker = ctx.get("_server_conversation_tracker", None)
+        if server_conversation_tracker is not None:
+            # override the none value of previous_response_id from the tracker
+            previous_response_id = server_conversation_tracker.previous_response_id
+
         # Get history directory
         history_dir = Path(ctx.get("_history_dir", cls.DEFAULT_HISTORY_DIR))
         
         # Record number of generated items before execution, so we can identify new ones
-        items_before = len(generated_items)
+        # items_before = len(generated_items)
 
         # Update turn info
         # Get and update metadata
@@ -199,7 +278,61 @@ class ContextManagedRunner(Runner):
 
         # Call parent method for actual execution
         try:
-            result = await super()._run_single_turn(**kwargs)
+            # now we have previous_response_id in kwargs if we use `openai_stateful_responses` as the provider
+
+            # MOST COPYIED FROM agents/run.py
+            # Ensure we run the hooks before anything else
+            if should_run_agent_start_hooks:
+                await asyncio.gather(
+                    hooks.on_agent_start(context_wrapper, agent),
+                    (
+                        agent.hooks.on_start(context_wrapper, agent)
+                        if agent.hooks
+                        else _coro.noop_coroutine()
+                    ),
+                )
+
+            system_prompt = await agent.get_system_prompt(context_wrapper)
+
+            output_schema = cls._get_output_schema(agent)
+            handoffs = cls._get_handoffs(agent)
+            
+            if server_conversation_tracker is not None:
+                input = server_conversation_tracker.prepare_input(original_input, generated_items)
+            else:
+                input = ItemHelpers.input_to_new_input_list(original_input)
+                input.extend([generated_item.to_input_item() for generated_item in generated_items])
+
+            new_response = await cls._get_new_response(
+                agent,
+                system_prompt,
+                input,
+                output_schema,
+                all_tools,
+                handoffs,
+                context_wrapper,
+                run_config,
+                tool_use_tracker,
+                previous_response_id,
+            )
+
+            result = await cls._get_single_step_result_from_response(
+                agent=agent,
+                original_input=original_input,
+                pre_step_items=generated_items,
+                new_response=new_response,
+                output_schema=output_schema,
+                all_tools=all_tools,
+                handoffs=handoffs,
+                hooks=hooks,
+                context_wrapper=context_wrapper,
+                run_config=run_config,
+                tool_use_tracker=tool_use_tracker,
+            )
+
+            # if every thing is fine, we update the server conversation tracker
+            if server_conversation_tracker is not None:
+                server_conversation_tracker.track_server_items(result.model_response)
         except ContextTooLongError as e:
             # Flag need for forced context reset, record steps executed
             ctx["_force_reset_context"] = {
@@ -212,7 +345,6 @@ class ContextManagedRunner(Runner):
             }
             # Raise to let upper logic handle
             raise
-
 
         meta["boundary_in_current_sequence"].append((meta["mini_turns_in_current_sequence"], 
                                                      meta["mini_turns_in_current_sequence"]+len(result.new_step_items)))
@@ -253,8 +385,8 @@ class ContextManagedRunner(Runner):
         # print("pending_truncate", pending_truncate)
 
         # Get all sequential items; type is list[TResponseInputItem]
-        all_seq_items = ItemHelpers.input_to_new_input_list(original_input)
-        all_seq_items.extend([generated_item.to_input_item() for generated_item in generated_items])
+        # all_seq_items = ItemHelpers.input_to_new_input_list(original_input)
+        # all_seq_items.extend([generated_item.to_input_item() for generated_item in generated_items])
 
         # TODO: Currently we ignore pre_step_items and new_step_items, just use all_seq_items
         # But that makes it impossible to tell which are pre_step_items and which new
