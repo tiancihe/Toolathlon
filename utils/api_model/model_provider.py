@@ -318,8 +318,8 @@ class ContextTooLongError(Exception):
 class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
     def __init__(self, model: str, 
                  openai_client: AsyncOpenAI, 
-                 retry_times: int = 5, # FIXME: hardcoded now, should be dynamic
-                 retry_delay: float = 5.0,
+                 retry_times: int = 10, # FIXME: hardcoded now, should be dynamic
+                 retry_delay: float = 10.0,
                  debug: bool = True,
                  short_model_name: str | None = None): # FIXME: hardcoded now, should be dynamic
         super().__init__(model=model, openai_client=openai_client)
@@ -795,8 +795,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
 class OpenAIResponsesModelWithRetry(OpenAIResponsesModel):
     def __init__(self, model: str, 
                  openai_client: AsyncOpenAI, 
-                 retry_times: int = 5, # FIXME: hardcoded now, should be dynamic
-                 retry_delay: float = 5.0,
+                 retry_times: int = 10, # FIXME: hardcoded now, should be dynamic
+                 retry_delay: float = 10.0,
                  debug: bool = True,
                  short_model_name: str | None = None): # FIXME: hardcoded now, should be dynamic
         super().__init__(model=model, openai_client=openai_client)

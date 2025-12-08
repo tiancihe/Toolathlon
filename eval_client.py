@@ -1058,6 +1058,36 @@ def run(
         typer.echo(f"\n⚠️  WARNING: {warning}", err=False)
         typer.echo(f"   Only use the same job ID if you want to resume an incomplete task.", err=False)
 
+    # Display rate limit information
+    rate_limit_info = result.get("rate_limit_info")
+    if rate_limit_info:
+        typer.echo(f"\n📊 Rate Limit Status:")
+        limit_mode = rate_limit_info.get("limit_mode")
+        usage = rate_limit_info.get("usage", {})
+
+        if limit_mode == "unlimited":
+            typer.echo(f"  🎉 No rate limits applied")
+        else:
+            # Display duration info
+            duration_info = usage.get("duration")
+            if duration_info and duration_info != "unlimited":
+                used_min = duration_info.get("used_minutes", 0)
+                remaining_min = duration_info.get("remaining_minutes", 0)
+                limit_min = duration_info.get("limit_minutes", 0)
+                typer.echo(f"  ⏱️  Duration: {used_min:.1f} / {limit_min} minutes used ({remaining_min:.1f} remaining)")
+            elif duration_info == "unlimited":
+                typer.echo(f"  ⏱️  Duration: Unlimited")
+
+            # Display request count info
+            request_info = usage.get("requests")
+            if request_info and request_info != "unlimited":
+                used_req = request_info.get("used", 0)
+                remaining_req = request_info.get("remaining", 0)
+                limit_req = request_info.get("limit", 0)
+                typer.echo(f"  📝 Requests: {used_req} / {limit_req} used ({remaining_req} remaining)")
+            elif request_info == "unlimited":
+                typer.echo(f"  📝 Requests: Unlimited")
+
     # Start background worker using subprocess with nohup-like behavior
     import subprocess
 
