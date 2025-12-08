@@ -7,7 +7,7 @@ Supports both public API mode and private (local vLLM) mode.
 """
 
 # Version control
-CLIENT_VERSION = "1.0"
+CLIENT_VERSION = "1.1"
 
 import asyncio
 import json
@@ -752,6 +752,10 @@ def run(
         False,
         help="Override and clear output directory if it exists and is not empty. If False (default), will error if output directory is not empty"
     ),
+    provider: str = typer.Option(
+        "unified",
+        help="Model provider type. Supported values: 'unified' (default, OpenAI-compatible API), 'openai_stateful_responses' (OpenAI Responses API with stateful context management)"
+    ),
 ):
     """
     Submit and run a Toolathlon evaluation task.
@@ -968,7 +972,8 @@ def run(
                 "model_name": model_name,
                 "workers": workers,
                 "custom_job_id": job_id,  # Pass custom job_id if provided
-                "skip_container_restart": skip_container_restart
+                "skip_container_restart": skip_container_restart,
+                "provider": provider  # Add provider field (v1.1+)
             }
 
             # Add model_params if provided

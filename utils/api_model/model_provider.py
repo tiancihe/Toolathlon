@@ -11,7 +11,7 @@ from agents import (
     _debug
 )
 from openai import AsyncOpenAI
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem
+from openai.types.responses import ResponseOutputMessage, ResponseOutputText, ResponseReasoningItem, ResponseStreamEvent
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 
@@ -19,6 +19,7 @@ from configs.global_configs import global_configs
 from addict import Dict
 
 from agents.models.openai_chatcompletions import *
+from agents.models.openai_responses import Converter as OpenAIResponsesConverter
 from agents.model_settings import ModelSettings
 
 from pydantic import BaseModel
@@ -29,7 +30,12 @@ from typing import List, Union
 from typing_extensions import Literal, Annotated, TypeAlias
 from openai._utils import PropertyInfo
 
-from pprint import pprint
+from agents.items import ItemHelpers
+from agents.version import __version__
+
+_USER_AGENT = f"Agents/Python {__version__}"
+_HEADERS = {"User-Agent": _USER_AGENT}
+
 
 class ResponseOutputReasoningContent(BaseModel):
     reasoning_content: str | None
@@ -460,6 +466,7 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
             self._get_client(), model_settings, stream=stream
         )
 
+
         # Load user-specified model parameters if provided
         user_model_params = None
         model_params_file = os.environ.get('TOOLATHLON_MODEL_PARAMS_FILE')
@@ -867,6 +874,99 @@ class OpenAIResponsesModelWithRetry(OpenAIResponsesModel):
                     raise Exception(f"Failed to get response after {self.retry_times} retries, error: {e}")
                 
                 await asyncio.sleep(self.retry_delay)
+
+    async def _fetch_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        previous_response_id: str | None,
+        stream: Literal[True] | Literal[False] = False,
+    ) -> Response | AsyncStream[ResponseStreamEvent]:
+        list_input = ItemHelpers.input_to_new_input_list(input)
+
+        parallel_tool_calls = (
+            True
+            if model_settings.parallel_tool_calls and tools and len(tools) > 0
+            else False
+            if model_settings.parallel_tool_calls is False
+            else NOT_GIVEN
+        )
+
+        tool_choice = OpenAIResponsesConverter.convert_tool_choice(model_settings.tool_choice)
+        converted_tools = OpenAIResponsesConverter.convert_tools(tools, handoffs)
+        response_format = OpenAIResponsesConverter.get_response_format(output_schema)
+
+        if _debug.DONT_LOG_MODEL_DATA:
+            logger.debug("Calling LLM")
+        else:
+            logger.debug(
+                f"Calling LLM {self.model} with input:\n"
+                f"{json.dumps(list_input, indent=2)}\n"
+                f"Tools:\n{json.dumps(converted_tools.tools, indent=2)}\n"
+                f"Stream: {stream}\n"
+                f"Tool choice: {tool_choice}\n"
+                f"Response format: {response_format}\n"
+                f"Previous response id: {previous_response_id}\n"
+            )
+
+        # Load user-specified model parameters if provided
+        user_model_params = None
+        model_params_file = os.environ.get('TOOLATHLON_MODEL_PARAMS_FILE')
+        if model_params_file and os.path.exists(model_params_file):
+            try:
+                with open(model_params_file, 'r') as f:
+                    user_model_params = json.load(f)
+                logger.info(f"[ModelProvider] Using custom model parameters from: {model_params_file}")
+                logger.info(f"[ModelProvider] Custom parameters: {json.dumps(user_model_params)}")
+            except Exception as e:
+                logger.warning(f"[ModelProvider] Failed to load model parameters file: {e}")
+
+        # Build base parameters
+        if user_model_params:
+            # User specified parameters: only use required params + user params
+            logger.info("[ModelProvider] Using USER-SPECIFIED parameters mode")
+            base_params = {
+                "previous_response_id": self._non_null_or_not_given(previous_response_id),
+                "instructions": self._non_null_or_not_given(system_instructions),
+                "model": self.model,
+                "input": list_input,
+                "include": converted_tools.includes,
+                "tools": converted_tools.tools,
+                "tool_choice": tool_choice,
+                "parallel_tool_calls": parallel_tool_calls,
+                "stream": stream,
+                **user_model_params  # User's custom parameters
+            }
+        else:
+            base_params = {
+                "previous_response_id": self._non_null_or_not_given(previous_response_id),
+                "instructions": self._non_null_or_not_given(system_instructions),
+                "model": self.model,
+                "input": list_input,
+                "include": converted_tools.includes,
+                "tools": converted_tools.tools,
+                "temperature": self._non_null_or_not_given(model_settings.temperature),
+                "top_p": self._non_null_or_not_given(model_settings.top_p),
+                "truncation": self._non_null_or_not_given(model_settings.truncation),
+                "max_output_tokens": self._non_null_or_not_given(model_settings.max_tokens),
+                "tool_choice": tool_choice,
+                "parallel_tool_calls": parallel_tool_calls,
+                "stream": stream,
+                "extra_headers": {**_HEADERS, **(model_settings.extra_headers or {})},
+                "extra_query": model_settings.extra_query,
+                "extra_body": model_settings.extra_body,
+                "text": response_format,
+                "store": self._non_null_or_not_given(model_settings.store),
+                "reasoning": self._non_null_or_not_given(model_settings.reasoning),
+                "metadata": self._non_null_or_not_given(model_settings.metadata),
+            }
+
+        return await self._client.responses.create(**base_params)
+
 
 class CustomModelProviderAiHubMix(ModelProvider):
     def get_model(self, model_name: str | None, debug: bool = True, short_model_name: str | None = None) -> Model:

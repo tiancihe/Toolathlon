@@ -412,6 +412,11 @@ class TaskAgent:
         local_tools = []
         if self.task_config.needed_local_tools is not None:
             for tool_name in self.task_config.needed_local_tools:
+                # Skip manage_context when using openai_stateful_responses provider
+                if self.agent_config.model.provider == "openai_stateful_responses" and tool_name == "manage_context":
+                    print_color(f"Skipping local tool `manage_context` when using `openai_stateful_responses` provider, as the context is automatically managed by the provider!", "yellow")
+                    continue
+
                 tool_or_toolsets = local_tool_mappings[tool_name]
                 if isinstance(tool_or_toolsets, list):
                     local_tools.extend(tool_or_toolsets)

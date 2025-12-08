@@ -7,8 +7,8 @@ Only one task can run at a time, with IP rate limiting (3 tasks per 24 hours).
 """
 
 # Version control
-SERVER_VERSION = "1.0"
-SUPPORTED_CLIENT_VERSIONS = ["1.0"]  # List of supported client versions
+SERVER_VERSION = "1.1"
+SUPPORTED_CLIENT_VERSIONS = ["1.0", "1.1"]  # List of supported client versions
 
 import asyncio
 import os
@@ -72,6 +72,7 @@ class SubmitEvaluationRequest(BaseModel):
     model_params: Optional[Dict[str, Any]] = None  # User-specified model parameters
     task_list_content: Optional[str] = None  # Task list file content (each line is a task name)
     skip_container_restart: bool = False  # Skip container restart (for debugging/testing only)
+    provider: str = "unified"  # Model provider (default: "unified" for backward compatibility with v1.0 clients)
 
 class SubmitEvaluationResponse(BaseModel):
     status: str
@@ -491,7 +492,7 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
                 "bash", "scripts/run_parallel.sh",
                 config["model_name"],
                 str(job_dir),
-                "unified",
+                config["provider"],  # Use provider from config (v1.1+)
                 str(config["workers"])
             ],
             env=env,
@@ -656,6 +657,18 @@ async def submit_evaluation(request: Request, data: SubmitEvaluationRequest):
     if data.mode not in ["public", "private"]:
         raise HTTPException(status_code=400, detail="Mode must be 'public' or 'private'")
 
+    # Validate provider (v1.1+)
+    ALLOWED_PROVIDERS = ["unified", "openai_stateful_responses"]
+    if data.provider not in ALLOWED_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid provider",
+                "message": f"Provider '{data.provider}' is not supported. Allowed values: {', '.join(ALLOWED_PROVIDERS)}",
+                "allowed_providers": ALLOWED_PROVIDERS
+            }
+        )
+
     # Generate or use custom job_id
     warning_msg = None
     if data.custom_job_id:
@@ -702,12 +715,13 @@ async def submit_evaluation(request: Request, data: SubmitEvaluationRequest):
         "workers": data.workers,
         "model_params": data.model_params,
         "task_list_content": data.task_list_content,
-        "skip_container_restart": data.skip_container_restart
+        "skip_container_restart": data.skip_container_restart,
+        "provider": data.provider  # Add provider (v1.1+)
     }
 
     asyncio.create_task(execute_evaluation(job_id, data.mode, config))
 
-    log(f"[Server] Accepted job {job_id} from {client_ip} (mode: {data.mode})")
+    log(f"[Server] Accepted job {job_id} from {client_ip} (mode: {data.mode}, provider: {data.provider})")
     if data.model_params:
         log(f"[Server] Using custom model parameters: {json.dumps(data.model_params)}")
     if data.task_list_content:

@@ -2,7 +2,12 @@
 
 Besides configuring Toolathlon evaluation on your own machine, we also provide Toolathlon evaluation as a service on public servers, where we have setup all the required MCP accounts and you don't need to worry about the setup -- you don't even need to install any MCP-related dependencies, evaluation can be ran by just communicating with our public server.
 
-> We have set up a public Toolathlon evaluation service on 47.253.6.47, this is mainly for you to quickly play with our evaluation without any setup. However, due to the potential evaluation conflict from multiple users, we have constrained this public service to be 3 evaluation requests per IP per 24 hours. If you find this public service crowded, you have a few other options to do the evaluation:
+> We have set up a public Toolathlon evaluation service on 47.253.6.47, this is mainly for you to quickly play with our evaluation without any setup. However, to ensure fair usage and prevent abuse, we have implemented a dual-limit rate limiting system on this public service:
+> - **Duration limit**: 180 minutes cumulative execution time per IP per 24 hours
+> - **Request count limit**: 3 evaluation requests per IP per 24 hours
+> - **Logic**: If your cumulative execution time is under 180 minutes, you can submit unlimited requests (great for debugging!). Once you exceed 180 minutes, the request count limit applies.
+>
+> If you find this public service too restrictive or crowded, you have a few other options:
 > 1. Setup your own Toolathlon evaluation service on your own machine following the main readme, which would take like 20-30 minutes.
 > 2. If you are a major user that will use Toolathlon evaluation a lot, please contact us (jlini@cse.ust.hk / junxianh@cse.ust.hk), we may be able to provide a dedicated evaluation service for you (for free).
 > 3. If you have an API endpoint and just want to test your model, please contact us (jlini@cse.ust.hk / junxianh@cse.ust.hk) and we are happy to help you run evaluation on Toolathlon with your given API endpoint.
@@ -98,6 +103,54 @@ python eval_client.py status --help
 
 
 ## Advanced Features
+
+### Model Provider Selection (v1.1+)
+
+Choose the appropriate provider based on your API endpoint type:
+
+**Supported Providers:**
+- `unified` (default) - Standard OpenAI-compatible APIs (OpenAI, Anthropic, OpenRouter, etc.)
+- `openai_stateful_responses` - OpenAI Responses API with automatic stateful context management
+
+**Usage:**
+
+```bash
+# Default: unified provider (no need to specify)
+python eval_client.py run \
+  --mode public \
+  --base-url https://api.openai.com/v1 \
+  --model-name gpt-4 \
+  --output-dir ./results \
+  --server-host 47.253.6.47 \
+  --api-key sk-...
+
+# Explicit unified provider
+python eval_client.py run \
+  --mode public \
+  --base-url https://api.openai.com/v1 \
+  --model-name gpt-4 \
+  --output-dir ./results \
+  --server-host 47.253.6.47 \
+  --api-key sk-... \
+  --provider unified
+
+# OpenAI Responses API with stateful context
+python eval_client.py run \
+  --mode public \
+  --base-url https://api.openai.com/v1 \
+  --model-name gpt-4 \
+  --output-dir ./results \
+  --server-host 47.253.6.47 \
+  --api-key sk-... \
+  --provider openai_stateful_responses
+```
+
+**When to use `openai_stateful_responses`:**
+- ✓ Using OpenAI's Responses API (not Chat Completions API)
+- ✓ Want automatic context management (no manual `manage_context` tool)
+- ✓ Working with stateful conversation history
+
+**Note:** The `manage_context` local tool is automatically disabled when using `openai_stateful_responses` provider, as context is managed by the API itself.
 
 ### Custom Model Parameters (Optional)
 
@@ -368,9 +421,146 @@ When checking server status, job IDs are anonymized:
 - Protects running task privacy
 
 ### Rate Limiting
-- Public server: 3 tasks per IP per 24 hours (configurable by server admin)
-- Prevents abuse and ensures fair access
-- Contact us for dedicated access if needed
+
+The server implements a dual-limit rate limiting system to ensure fair usage:
+
+#### Rate Limit Modes
+
+**1. Dual Limit Mode (Default)**
+- **Duration Limit**: Maximum cumulative execution time per IP (e.g., 180 minutes)
+- **Request Count Limit**: Maximum number of submissions per IP (e.g., 3 requests)
+- **Logic**: If cumulative execution time < duration limit → unlimited submissions allowed (for debugging). Once duration limit exceeded → request count limit applies.
+
+**2. Duration-Only Mode**
+- Only limits total execution time
+- Request count is unlimited
+- Set by passing `-1` for request count parameter
+
+**3. Count-Only Mode**
+- Only limits number of submissions
+- Execution time is unlimited
+- Set by passing `-1` for duration parameter
+
+**4. Unlimited Mode**
+- No restrictions on either duration or request count
+- Set by passing `-1` for both parameters
+
+#### How It Works
+
+When you submit a task, the server tracks:
+- Your IP address
+- Each job's start time and duration
+- Your cumulative execution time within the 24-hour window
+
+**Example (Dual Limit: 180 minutes + 3 requests):**
+```
+User A submits 5 small debug tasks (total: 30 minutes)
+→ ✓ All pass (under duration limit)
+
+User B submits 2 long tasks (total: 200 minutes)
+→ ✓ First 2 pass
+→ ✗ Third request blocked (duration limit exceeded + reached request limit)
+
+After 24 hours: limits reset
+```
+
+#### Rate Limit Response
+
+When rate limited, you'll receive detailed feedback:
+```json
+{
+  "error": "Rate limit exceeded",
+  "message": "Rate limit exceeded:\n  • Cumulative duration: 185.3 / 180 minutes (EXCEEDED)\n  • Request count: 3 / 3 (EXCEEDED)\n  • Time window: 24 hours\n  • Retry after: 2025-12-09T10:30:45"
+}
+```
+
+#### Successful Submission Response
+
+After successful submission, you'll receive remaining quota information:
+```json
+{
+  "status": "accepted",
+  "job_id": "job_abc123def456",
+  "rate_limit_info": {
+    "limit_mode": "both",
+    "usage": {
+      "duration": {
+        "used_minutes": 45.2,
+        "remaining_minutes": 134.8,
+        "limit_minutes": 180
+      },
+      "requests": {
+        "used": 2,
+        "remaining": 1,
+        "limit": 3
+      }
+    }
+  }
+}
+```
+
+#### Data Persistence
+
+Rate limit data is persisted to disk (`dumps_public_service/ip_rate_limit_data.json`), which means:
+- ✓ Limits survive server restarts
+- ✓ No way to bypass by restarting server
+- ✓ Fair enforcement across all users
+
+#### Automatic Cleanup
+
+The server automatically cleans up old data:
+- Job directories older than 7 days are deleted (runs every 24 hours)
+- Rate limit data within 24-hour window is preserved
+- Keeps disk usage under control
+
+#### Contact for Higher Limits
+
+Public server uses conservative limits. For higher limits:
+- Email: jlini@cse.ust.hk / junxianh@cse.ust.hk
+- We can provide dedicated evaluation channels for major users (free of charge)
+
+---
+
+## Version Compatibility
+
+### Current Versions
+- **Server Version**: 1.1
+- **Client Version**: 1.1
+- **Supported Client Versions**: 1.0, 1.1
+
+### Version History
+
+**v1.1 (Current)**
+- Added `--provider` parameter for model provider selection
+- Supported providers: `unified` (default), `openai_stateful_responses`
+- Automatic `manage_context` tool disabling for stateful providers
+- Backward compatible with v1.0 clients (provider defaults to `unified`)
+
+**v1.0**
+- Initial release
+- Single provider mode (unified)
+- All core features (public/private mode, rate limiting, task management)
+
+### Compatibility Notes
+
+**v1.0 clients → v1.1 server:**
+- ✓ Fully compatible
+- Provider automatically defaults to `unified`
+- All v1.0 features work as expected
+
+**v1.1 clients → v1.0 server:**
+- ✗ Not supported
+- Server will reject v1.1 client with version error
+- Update server to v1.1 or downgrade client to v1.0
+
+**Checking versions:**
+```bash
+# Client version (defined at top of eval_client.py)
+grep "CLIENT_VERSION" eval_client.py
+
+# Server version (shown in startup output)
+python eval_server.py 8080 8081
+```
 
 ---
 
@@ -420,43 +610,77 @@ uv add fastapi uvicorn websockets
 ### Start Server
 
 ```bash
-python eval_server.py <server_port> <ws_proxy_port> <max_submissions_per_ip>
+python eval_server.py <server_port> <ws_proxy_port> <max_submissions_per_ip> <max_workers> <max_duration_minutes>
 ```
 
 **Parameters:**
 - `server_port` - Main server port (default: 8080)
 - `ws_proxy_port` - WebSocket proxy port for private mode (default: 8081)
-- `max_submissions_per_ip` - Rate limit per IP per 24h (default: 3, use -1 for unlimited)
+- `max_submissions_per_ip` - Max requests per IP per 24h (default: 3, use -1 for unlimited)
+- `max_workers` - Max parallel workers per task (default: 10)
+- `max_duration_minutes` - Max cumulative execution time per IP per 24h in minutes (default: 180, use -1 for unlimited)
 
 **Examples:**
 
 ```bash
-# Default: 3 submissions per IP per 24h
-python eval_server.py 8080 8081
+# Default: Dual limit (180 min duration + 3 requests per IP per 24h)
+python eval_server.py 8080 8081 3 10 180
 
-# Unlimited submissions (no rate limiting)
-python eval_server.py 8080 8081 -1
+# Duration-only limit: 300 minutes, unlimited requests
+python eval_server.py 8080 8081 -1 10 300
 
-# Custom limit: 10 submissions per IP per 24h
-python eval_server.py 8080 8081 10
+# Count-only limit: 10 requests, unlimited duration
+python eval_server.py 8080 8081 10 10 -1
+
+# Completely unlimited (no rate limiting)
+python eval_server.py 8080 8081 -1 10 -1
+
+# Custom dual limit: 5 requests + 240 minutes
+python eval_server.py 8080 8081 5 10 240
 ```
 
 **Server output:**
 
-Default (with rate limiting):
+Dual limit mode (default):
 ```
 ============================================================
 Toolathlon Remote Evaluation Server
 ============================================================
+Server Version: 1.1
+Supported Client Versions: 1.0, 1.1
 Server Port: 8080
 WebSocket Proxy Port: 8081 (for private mode)
-Max tasks per IP: 3 per 24 hours
+Rate limiting: Dual limit (duration: 180 minutes per 24 hours, count: 3 per 24 hours)
+Max workers per task: 10
 Timeout: 240 minutes
 Output directory: ./dumps_public_service
 ============================================================
+No existing rate limit data file found, starting fresh
 ✓ WebSocket proxy started (PID: 12345)
   Log: ./dumps_public_service/ws_proxy.log
 ============================================================
+[Server] Started background cleanup task (runs every 24 hours)
+```
+
+Duration-only mode:
+```
+============================================================
+Toolathlon Remote Evaluation Server
+============================================================
+Server Version: 1.1
+Supported Client Versions: 1.0, 1.1
+Server Port: 8080
+WebSocket Proxy Port: 8081 (for private mode)
+Rate limiting: Duration limit only: 300 minutes per 24 hours
+Max workers per task: 10
+Timeout: 240 minutes
+Output directory: ./dumps_public_service
+============================================================
+Loaded rate limit data: 5 IPs, 42 total records
+✓ WebSocket proxy started (PID: 12345)
+  Log: ./dumps_public_service/ws_proxy.log
+============================================================
+[Server] Started background cleanup task (runs every 24 hours)
 ```
 
 Unlimited mode:
@@ -464,23 +688,50 @@ Unlimited mode:
 ============================================================
 Toolathlon Remote Evaluation Server
 ============================================================
+Server Version: 1.1
+Supported Client Versions: 1.0, 1.1
 Server Port: 8080
 WebSocket Proxy Port: 8081 (for private mode)
-Max tasks per IP: Unlimited (no rate limiting)
+Rate limiting: No rate limiting
+Max workers per task: 10
 Timeout: 240 minutes
 Output directory: ./dumps_public_service
 ============================================================
 ✓ WebSocket proxy started (PID: 12345)
   Log: ./dumps_public_service/ws_proxy.log
 ============================================================
+[Server] Started background cleanup task (runs every 24 hours)
 ```
 
 ### Server Configuration
 
+**Core Settings:**
 - **Timeout:** 240 minutes (4 hours) per task
-- **Concurrent tasks:** 1 task at a time (single-job queue)
-- **Rate limiting:** Configurable per IP (default 3 per 24h, -1 for unlimited)
-- **Output directory:** `./dumps_public_service/` (configurable in code)
+- **Concurrent tasks:** 1 task at a time (single-job queue to ensure resource availability)
+- **Max workers:** Configurable per task (default: 10)
+- **Output directory:** `./dumps_public_service/` (hardcoded in `eval_server.py`)
+
+**Rate Limiting:**
+- **Dual-limit system:** Duration threshold + request count limit
+- **Time window:** 24 hours (configurable via `RATE_LIMIT_HOURS` in code)
+- **Default limits:** 180 minutes cumulative duration + 3 requests
+- **Persistence:** Rate limit data saved to `dumps_public_service/ip_rate_limit_data.json`
+- **Survives restarts:** Data persists across server restarts
+
+**Automatic Cleanup:**
+- **Frequency:** Every 24 hours
+- **Cleanup rule:** Delete job directories older than 7 days (based on last modification time)
+- **Protected files:** `ip_rate_limit_data.json` is never deleted
+- **Background task:** Starts automatically on server startup
+- **Purpose:** Prevents disk usage from growing indefinitely
+
+**Job Tracking:**
+Each job submission records:
+- Job ID and client IP
+- Submission timestamp
+- Completion timestamp
+- Execution duration
+- All stored in persistent rate limit data file
 
 ### Server Management
 
