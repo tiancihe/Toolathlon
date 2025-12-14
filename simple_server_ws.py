@@ -216,11 +216,10 @@ async def push_requests_to_client(websocket: WebSocket):
 
 # ===== HTTP API =====
 
-@app.post("/v1/chat/completions")
-async def proxy_chat(request: Request, request_data: dict):
-    """Pretend to be OpenAI API"""
+async def _handle_proxy_request(request: Request, request_data: dict, endpoint: str):
+    """Common handler for proxy requests (both /chat/completions and /responses)"""
     request_id = f"req_{uuid.uuid4().hex[:8]}"
-    log(f"[Server] Received request {request_id}")
+    log(f"[Server] Received {endpoint} request {request_id}")
 
     # Check if there is a Client connected
     if connected_client is None:
@@ -236,10 +235,11 @@ async def proxy_chat(request: Request, request_data: dict):
             status_code=503
         )
 
-    # Add to pending queue
+    # Add to pending queue with endpoint information
     pending_requests[request_id] = {
         "request_id": request_id,
         "pushed": False,
+        "_endpoint": endpoint,  # Add endpoint metadata
         **request_data
     }
 
@@ -282,6 +282,16 @@ async def proxy_chat(request: Request, request_data: dict):
         },
         status_code=504
     )
+
+@app.post("/v1/chat/completions")
+async def proxy_chat(request: Request, request_data: dict):
+    """Proxy for OpenAI Chat Completions API"""
+    return await _handle_proxy_request(request, request_data, "/chat/completions")
+
+@app.post("/v1/responses")
+async def proxy_responses(request: Request, request_data: dict):
+    """Proxy for OpenAI Responses API"""
+    return await _handle_proxy_request(request, request_data, "/responses")
 
 @app.get("/")
 async def root():

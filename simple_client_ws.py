@@ -28,13 +28,23 @@ async def process_single_request(
     try:
         log(f"[Client] Start processing request: {request_id}")
 
+        # Determine endpoint from metadata (default to /chat/completions for backward compatibility)
+        endpoint = request_data.get("_endpoint", "/chat/completions")
+        log(f"[Client] Using endpoint: {endpoint}")
+
         # 调用真实的 LLM
         headers = {"Authorization": f"Bearer {llm_api_key}"}
 
+        # Filter out metadata fields (those starting with _) and internal fields
+        filtered_data = {
+            k: v for k, v in request_data.items()
+            if k not in ["request_id", "pushed", "_server_push_time"] and not k.startswith("_")
+        }
+
         async with httpx.AsyncClient(timeout=600.0) as client:  # 10 minutes timeout
             llm_resp = await client.post(
-                f"{llm_base_url}/chat/completions",
-                json={k: v for k, v in request_data.items() if k not in ["request_id", "pushed"]},
+                f"{llm_base_url}{endpoint}",  # Use the endpoint from metadata
+                json=filtered_data,
                 headers=headers
             )
 
@@ -49,7 +59,7 @@ async def process_single_request(
                 "status_code": llm_resp.status_code,
                 "body": llm_resp.json()
             }
-            log(f"[Client] LLM response successful: {request_id}, status code: {llm_resp.status_code}")
+            log(f"[Client] LLM response successful: {request_id}, endpoint: {endpoint}, status code: {llm_resp.status_code}")
 
     except Exception as e:
         # Network error or timeout
