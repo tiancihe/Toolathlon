@@ -1,4 +1,4 @@
-- [2025/12/14] We have updated the MCP authentication mechanism for the Notion official MCP server. Please refer to the [How to Register Accounts](./global_preparation/how2register_accounts.md) for more details. This allow multiple services with different set of accounts to be launched on the same machine simultaneously.
+- [2025/12/14] We have updated the MCP authentication mechanism for the Notion official MCP server. Please refer to the [How to Register Accounts](./global_preparation/how2register_accounts.md) for more details.
 
 - [2025/12/12] The original single factor authentication mechanism for Snowflake is not working if the account finishes the trial period. We need to use RSA public key authentication instead.= and we have updated our codebases and documentation to support this new authentication mechanism. Please refer to the renewed [How to Register Accounts](./global_preparation/how2register_accounts.md) for more details.
 
