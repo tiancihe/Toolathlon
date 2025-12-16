@@ -78,10 +78,10 @@ class ConverterWithExplicitReasoningContent(Converter):
             # we assert they do not exist at the same time
             assert not (hasattr(message, "reasoning_content") and hasattr(message, "reasoning_details")), "WE DO NOT SUPPORT BOTH reasoning_content AND reasoning_details AT THE SAME TIME"
             if hasattr(message, "reasoning_content"):
-                reasoning_content = json.dumps(message.reasoning_content)
-                pure_thinking_str = reasoning_content
+                pure_thinking_str = message.reasoning_content
+                reasoning_content = json.dumps({"field_name": "reasoning_content", "value": message.reasoning_content})
             else:
-                reasoning_content = json.dumps(message.reasoning_details)
+                reasoning_content = json.dumps({"field_name": "reasoning_details", "value": message.reasoning_details})
                 pure_thinking_str = None
                 assert isinstance(message.reasoning_details, list), "REASONING_DETAILS SHOULD BE A LIST IN OUR DESIGN"
                 for detail in message.reasoning_details:
@@ -248,9 +248,10 @@ class ConverterWithExplicitReasoningContent(Converter):
                             f"Only audio IDs are supported for chat completions, but got: {c}"
                         )
                     elif c["type"] == "reasoning_content":
-                        new_asst["reasoning_content"] = json.loads(c["reasoning_content"]) # the reasoning_content is always a json string
-                        # we also fill back the reasoning_details to the message
-                        new_asst["reasoning_details"] = json.loads(c["reasoning_content"])
+                        reasoning_content_tmp = json.loads(c["reasoning_content"])
+                        if reasoning_content_tmp is not None:
+                            field_name, value = reasoning_content_tmp.get("field_name"), reasoning_content_tmp.get("value")
+                            new_asst[field_name] = value
                         # deserialize the extra contents in the tool calls, they will be used later to fill back the extra content in the tool calls
                         new_asst["extra_contents_in_tool_calls"] = json.loads(c["extra_contents_in_tool_calls"])
                     else:
