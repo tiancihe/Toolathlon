@@ -8,6 +8,9 @@ import logging
 import snowflake.connector
 from snowflake.connector import DictCursor
 from configs.token_key_session import all_token_key_session as GLOBAL_TOKENS
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +19,28 @@ def _build_conn_kwargs() -> dict:
     """Build connection parameters from global token configuration."""
     kwargs = {
         'user': GLOBAL_TOKENS.snowflake_user,
-        'password': GLOBAL_TOKENS.snowflake_password,
+        # 'password': GLOBAL_TOKENS.snowflake_password,
         'account': GLOBAL_TOKENS.snowflake_account,
         'warehouse': GLOBAL_TOKENS.snowflake_warehouse,
         'role': GLOBAL_TOKENS.snowflake_role,
     }
+    private_key_path = getattr(GLOBAL_TOKENS, 'snowflake_private_key_path', None)
+    private_key_bytes = None
+    if private_key_path:
+        with open(private_key_path, 'rb') as key_file:
+            private_key_obj = serialization.load_pem_private_key(
+                key_file.read(),
+                password=None, 
+                backend=default_backend()
+            )
+
+            private_key_bytes = private_key_obj.private_bytes(
+                encoding=serialization.Encoding.DER,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+    if private_key_bytes:
+        kwargs['private_key'] = private_key_bytes
     if getattr(GLOBAL_TOKENS, 'snowflake_database', None):
         kwargs['database'] = GLOBAL_TOKENS.snowflake_database
     if getattr(GLOBAL_TOKENS, 'snowflake_schema', None):

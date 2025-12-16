@@ -507,7 +507,7 @@ class NotionPageDuplicator:
                 print(f"WARNING: Retrieved object type is '{page_type}', not 'page'. This might cause issues.")
 
             # Try to move the page with retry logic for "not ready" errors
-            max_move_attempts = 3
+            max_move_attempts = 8
             move_attempt = 0
             move_successful = False
 
@@ -534,7 +534,7 @@ class NotionPageDuplicator:
                         # Check if it's a "not ready" error
                         if 'not a page or database' in error_msg.lower() or error_code == 'validation_error':
                             if move_attempt < max_move_attempts:
-                                wait_time = move_attempt * 2  # Exponential backoff: 2s, 4s, 6s
+                                wait_time = 2 ** move_attempt # Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 512s, 1024s
                                 print(f"Page not fully ready yet (attempt {move_attempt}/{max_move_attempts}). Waiting {wait_time}s before retry...")
                                 time.sleep(wait_time)
                                 continue
