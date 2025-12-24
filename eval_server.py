@@ -248,18 +248,25 @@ def is_task_finished(status: dict) -> bool:
 
     Returns True if:
     - preprocess failed, OR
-    - preprocess succeeded AND running reached terminal state
+    - running failed (no evaluation will happen), OR
+    - running succeeded AND evaluation completed (true or false)
     """
     preprocess = status.get('preprocess')
     running = status.get('running')
+    evaluation = status.get('evaluation')
 
-    # Case 1: preprocess failed -> task finished
+    # Case 1: preprocess failed -> task finished (no running, no evaluation)
     if preprocess == 'fail':
         return True
 
-    # Case 2: preprocess succeeded and running reached terminal state
-    if preprocess == 'done' and running in ['done', 'timeout', 'max_turn_exceeded', 'fail']:
+    # Case 2: running failed -> task finished (no evaluation will happen)
+    if preprocess == 'done' and running == 'fail':
         return True
+
+    # Case 3: running succeeded (done/timeout/max_turn_exceeded) -> check evaluation
+    # evaluation must not be None (must be True or False, indicating evaluation completed)
+    if preprocess == 'done' and running in ['done', 'timeout', 'max_turn_exceeded']:
+        return evaluation is not None
 
     return False
 
