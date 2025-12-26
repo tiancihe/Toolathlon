@@ -2,51 +2,110 @@ from argparse import ArgumentParser
 import subprocess
 import sys
 from pathlib import Path
+from argparse import ArgumentParser
+import imaplib
+import email
+import json
+import re
+from datetime import datetime, timedelta, timezone
+import os
+from utils.general.helper import normalize_str
 
-def run_local_check(agent_workspace, groundtruth_workspace):
-    """Run local checks"""
+def check_local_email(target_email="jjones@mcp.com", agent_email="donna_castillo56@mcp.com"):
+    """Check if email was sent to target recipient with correct content via local IMAP"""
     try:
-        result = subprocess.run([
-            sys.executable, 
-            str(Path(__file__).parent / "check_local.py"),
-            "--agent_workspace", agent_workspace,
-            "--groundtruth_workspace", groundtruth_workspace
-        ], capture_output=True, text=True, check=True)
-        
-        print("✅ Local check passed")
-        if result.stdout:
-            print(result.stdout)
-        return True
-        
-    except subprocess.CalledProcessError as e:
-        print("❌ Local check failed")
-        if e.stdout:
-            print(e.stdout)
-        if e.stderr:
-            print(e.stderr)
-        return False
+        # Connect to local IMAP server
+        imap_server = imaplib.IMAP4('localhost', 1143)
 
-def run_remote_check(agent_workspace):
-    """Run remote checks"""
-    try:
-        result = subprocess.run([
-            sys.executable,
-            str(Path(__file__).parent / "check_remote.py"),
-            "--agent_workspace", agent_workspace
-        ], capture_output=True, text=True, check=True)
+        # Login as admin to check received emails
+        imap_server.login('jjones@mcp.com', 'jessica1987%')
+
+        # Select inbox
+        imap_server.select('INBOX')
+
+        # Search for recent emails from agent
+        date_filter = (datetime.now() - timedelta(hours=24)).strftime('%d-%b-%Y')
+        search_criteria = f'(FROM "{agent_email}" SINCE {date_filter})'
+
+        result, message_ids = imap_server.search(None, search_criteria)
+
+        if result != 'OK' or not message_ids[0]:
+            return False, f"No emails found from {agent_email} to {target_email} in last 24 hours"
+
+        # Get the most recent email
+        latest_id = message_ids[0].split()[-1]
+        result, msg_data = imap_server.fetch(latest_id, '(RFC822)')
+
+        if result != 'OK':
+            return False, "Failed to fetch email content"
+
+        # Parse email
+        email_msg = email.message_from_bytes(msg_data[0][1])
+
+        # Get email body
+        body = ""
+        if email_msg.is_multipart():
+            for part in email_msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body = part.get_payload(decode=True).decode('utf-8')
+                    break
+        else:
+            body = email_msg.get_payload(decode=True).decode('utf-8')
+
+        # Check required content
+        # 1. Check time format (flexible for different formats, prioritize English)
+        time_patterns = [
+            r"Tuesday.*?2:00.*?PM.*?4:00.*?PM",
+            r"Tuesday.*?14:00.*?16:00"
+        ]
+
+        print(f"the email content is:```\n{body}\n```")
+
+        time_found = any(re.search(pattern, body, re.IGNORECASE) for pattern in time_patterns)
+
+        if not time_found:
+            return False, "Required meeting time format not found in email body"
+
+        # 2. Check all required participants
+        required_participants = [
+            "jinghanz", "junteng", "Junxian", "shiqi", "Ting Wu",
+            "Wei Liu", "Weihao Zeng", "YANG Cheng", "童雨轩", "黄裕振"
+        ]
+
+        missing_participants = [name for name in required_participants if name not in body]
+
+        if "童雨轩" in missing_participants:
+            # check english name
+            if "yuxuantong" in normalize_str(body) or "tongyuxuan" in normalize_str(body):
+                missing_participants.remove("童雨轩")
+            
+        if "黄裕振" in missing_participants:
+            # check english name
+            if "yuzhenhuang" in normalize_str(body) or "huangyuzhen" in normalize_str(body):
+                missing_participants.remove("黄裕振")
+
+        if missing_participants:
+            return False, f"Missing participants in email: {missing_participants}"
+
+        # 3. Check email date
+        email_date = email.utils.parsedate_to_datetime(email_msg['Date'])
         
-        print("✅ Remote check passed")
-        if result.stdout:
-            print(result.stdout)
-        return True
+        # Get the current time as a timezone-aware object in UTC
+        now_utc = datetime.now(timezone.utc)
         
-    except subprocess.CalledProcessError as e:
-        print("❌ Remote check failed")
-        if e.stdout:
-            print(e.stdout)
-        if e.stderr:
-            print(e.stderr)
-        return False
+        # Convert the email's date to UTC to ensure a correct comparison
+        email_date_utc = email_date.astimezone(timezone.utc)
+        
+        if now_utc - email_date_utc > timedelta(hours=24):
+            return False, "Email was not sent recently (within 24 hours)"
+
+        imap_server.close()
+        imap_server.logout()
+
+        return True, "Local email verification successful: correct recipient, time format, and participants found"
+
+    except Exception as e:
+        return False, f"Error checking local email: {str(e)}"
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -57,27 +116,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print("🚀 Meeting Assign - Evaluation")
-    print("=" * 50)
-    
-    success = True
-    
-    # Run local checks
-    print("\n📁 Running local checks...")
-    local_success = run_local_check(args.agent_workspace, args.groundtruth_workspace)
-    success = success and local_success
-    
-    # Run remote checks
-    print("\n🌐 Running remote checks...")
-    remote_success = run_remote_check(args.agent_workspace)
-    success = success and remote_success
+    success, message = check_local_email()
     
     # Final result
-    print("\n" + "=" * 50)
+    print("=" * 50)
     if success:
         print("🎉 All evaluation checks passed!")
         print("✅ Meeting assignment task completed successfully")
     else:
         print("❌ Evaluation failed!")
-        raise RuntimeError("Meeting assignment evaluation failed")
-    
-    print("Pass test!" if success else "Fail test!") 
+        raise RuntimeError("Meeting assignment evaluation failed: " + message)
