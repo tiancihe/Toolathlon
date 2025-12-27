@@ -1403,7 +1403,7 @@ Output directory: {DUMPS_DIR}
 
     import subprocess
     ws_proxy_process = subprocess.Popen(
-        [sys.executable, "simple_server_ws.py", str(ws_proxy_port)],
+        [sys.executable, "simple_server_ws.py", str(ws_proxy_port), "--eval-port", str(server_port)],
         stdout=ws_proxy_log_file,
         stderr=subprocess.STDOUT
     )

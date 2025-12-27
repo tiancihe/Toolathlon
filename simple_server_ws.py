@@ -109,12 +109,13 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str = None):
             pass
         return
 
-    # Verify job_id with eval_server (assumes eval_server is on localhost:8080)
+    # Verify job_id with eval_server
     import httpx
+    eval_port = getattr(app.state, 'eval_port', 8080)  # Default to 8080 for backward compatibility
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
-                "http://localhost:8080/internal/validate_job",
+                f"http://localhost:{eval_port}/internal/validate_job",
                 params={"job_id": job_id}
             )
             if resp.status_code == 200:
@@ -526,11 +527,27 @@ async def root():
 
 if __name__ == "__main__":
     import sys
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
+    import argparse
+
+    parser = argparse.ArgumentParser(description="WebSocket Proxy Server")
+    parser.add_argument("port", type=int, nargs='?', default=8080, help="WebSocket server port")
+    parser.add_argument("--eval-port", type=int, default=8080, help="Eval server port for job validation")
+
+    # Support both old-style (positional only) and new-style (with --eval-port)
+    # Old: python simple_server_ws.py 8081
+    # New: python simple_server_ws.py 8081 --eval-port 8080
+    args = parser.parse_args()
+
+    port = args.port
+    eval_port = args.eval_port
+
+    # Store eval_port globally for use in websocket_endpoint
+    app.state.eval_port = eval_port
 
     print("="*50)
     print("WebSocket Proxy Server (Production)")
-    print(f"Port: {port}")
+    print(f"WebSocket Port: {port}")
+    print(f"Eval Server Port: {eval_port}")
     print(f"WebSocket: ws://0.0.0.0:{port}/ws")
     print("="*50)
 
