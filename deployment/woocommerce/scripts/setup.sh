@@ -369,7 +369,7 @@ load_users_from_json() {
     # Extract users data from JSON file, starting from specified index
     # Note: jq array indexing is 0-based, so we subtract 1 from start_index
     local jq_start=$((start_index - 1))
-    local jq_end=$((jq_start + count - 1))
+    local jq_end=$((jq_start + count))
     
     jq -r ".users[${jq_start}:${jq_end}] | .[] | \"\(.id)|\(.first_name)|\(.last_name)|\(.full_name)|\(.email)|\(.password)|\(.woocommerce_consumer_key)|\(.woocommerce_consumer_secret)\"" "$users_file"
 }
