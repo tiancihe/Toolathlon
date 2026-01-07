@@ -8,6 +8,10 @@
 #   # ... run your tasks ...
 #   python scripts/apply_port_numbers.py --restore
 
+# Instance suffix for container names (e.g., "_inst1", "_inst2")
+# Leave empty ("") for default container names
+instance_suffix: ""
+
 port_mappings:
   10001: 11001
   20001: 21001
