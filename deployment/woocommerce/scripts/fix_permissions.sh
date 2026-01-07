@@ -4,12 +4,27 @@
 # read out `podman_or_docker` from global_configs.py
 podman_or_docker=$(uv run python -c "import sys; sys.path.append('configs'); from global_configs import global_configs; print(global_configs.podman_or_docker)")
 
+# Read instance_suffix from ports_config.yaml
+instance_suffix=$(uv run python -c "
+import yaml
+try:
+    with open('configs/ports_config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+        print(config.get('instance_suffix', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+
+WOO_POD="woo-pod${instance_suffix}"
+WOO_DB="woo-db${instance_suffix}"
+WOO_WP="woo-wp${instance_suffix}"
+WOO_NET="woo-net${instance_suffix}"
 
 echo "Fixing WooCommerce upload permissions..."
 
 # Check if container is running
-if ! $podman_or_docker exec woo-wp wp --version --allow-root --path=/var/www/html &>/dev/null; then
-    echo "❌ Error: WooCommerce container 'woo-wp' is not running"
+if ! $podman_or_docker exec $WOO_WP wp --version --allow-root --path=/var/www/html &>/dev/null; then
+    echo "❌ Error: WooCommerce container '$WOO_WP' is not running"
     echo "Please run deployment/woocommerce/scripts/setup.sh first"
     exit 1
 fi
@@ -18,7 +33,7 @@ echo "1. Ensuring uploads directory exists and creating current month folder..."
 CURRENT_YEAR=$(date +%Y)
 CURRENT_MONTH=$(date +%m)
 
-$podman_or_docker exec woo-wp bash -c "
+$podman_or_docker exec $WOO_WP bash -c "
     # Create base uploads directory if it doesn't exist
     mkdir -p /var/www/html/wp-content/uploads/
     
@@ -30,19 +45,19 @@ $podman_or_docker exec woo-wp bash -c "
 
 echo "2. Setting correct ownership..."
 # Set ownership to www-data (Apache user in WordPress container)
-$podman_or_docker exec woo-wp bash -c '
+$podman_or_docker exec $WOO_WP bash -c '
     chown -R www-data:www-data /var/www/html/wp-content/uploads/
 '
 
 echo "3. Setting correct permissions..."
 # Set directories to 755 and files to 644
-$podman_or_docker exec woo-wp bash -c '
+$podman_or_docker exec $WOO_WP bash -c '
     find /var/www/html/wp-content/uploads/ -type d -exec chmod 755 {} \;
     find /var/www/html/wp-content/uploads/ -type f -exec chmod 644 {} \;
 '
 
 echo "4. Verifying current directory structure and permissions..."
-$podman_or_docker exec woo-wp bash -c '
+$podman_or_docker exec $WOO_WP bash -c '
     echo "=== Current uploads directory structure ==="
     find /var/www/html/wp-content/uploads/ -type d | head -10
     echo ""
@@ -55,7 +70,7 @@ $podman_or_docker exec woo-wp bash -c '
 
 echo "5. Testing upload functionality..."
 # Test if WordPress can write to uploads directory
-TEST_RESULT=$($podman_or_docker exec woo-wp bash -c '
+TEST_RESULT=$($podman_or_docker exec $WOO_WP bash -c '
     if [ -w /var/www/html/wp-content/uploads/ ]; then
         echo "WRITABLE"
     else
@@ -77,5 +92,5 @@ echo "If you still get upload errors, try:"
 echo "1. Restart the WooCommerce service:"
 echo "   deployment/woocommerce/scripts/setup.sh restart"
 echo "2. Check container logs:"
-echo "   $podman_or_docker logs woo-wp"
+echo "   $podman_or_docker logs $WOO_WP"
 echo "========================================="

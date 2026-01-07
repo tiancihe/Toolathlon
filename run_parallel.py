@@ -433,7 +433,8 @@ def filter_tasks_with_existing_results(all_task_dir_args: List[str], dump_path: 
                 with open(status_file, 'r', encoding='utf-8') as f:
                     status_data = json.load(f)
                 running_status = status_data.get('running', None)
-                if running_status in ['timeout', 'max_turn_exceeded']:
+                preprocess_status = status_data.get('preprocess', None)
+                if running_status in ['timeout', 'max_turn_exceeded'] and preprocess_status == 'done':
                     tasks_already_completed.append(task_dir_arg)
                     continue
                 if (status_data.get('preprocess') == 'done' and

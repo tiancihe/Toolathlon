@@ -18,7 +18,7 @@ echo "Checking and killing processes on required ports..."
 echo "============================================================================================="
 
 # Define all required ports
-REQUIRED_PORTS=(10001 20001 10005 2525 1143 2587 10003 30123 30124 30137)
+REQUIRED_PORTS=(10001 20001 10005 2525 1143 1587 10003 30123 30124 30137)
 
 for port in "${REQUIRED_PORTS[@]}"; do
     # Check if port is in use
