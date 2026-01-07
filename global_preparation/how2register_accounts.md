@@ -123,7 +123,7 @@ openssl genrsa 2048 | openssl pkcs8 -topk8 -v2 des3 -inform PEM -out ./configs/s
 # generate a public key
 openssl rsa -in ./configs/snowflake_rsa_key.p8 -pubout -out ./configs/snowflake_rsa_key.pub
 # show the public key
-cat ./configs/snowflake_rsa_key.pub | grep -v "BEGIN PUBLIC KEY" | grep -v "END PUBLIC KEY" | tr -d '\n'
+cat ./configs/snowflake_rsa_key.pub | grep -v "BEGIN PUBLIC KEY" | grep -v "END PUBLIC KEY" | tr -d '\n'; echo
 ```
 then login to your snowflake and configure the shown public key in the snowflake console：
 1. create a new SQL file
