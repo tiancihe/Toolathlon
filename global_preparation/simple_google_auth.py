@@ -3,19 +3,22 @@
 Simple automated Google OAuth helper
 
 This is a streamlined version that:
-1. Starts a local server
+1. Starts a local server for automatic callback
 2. Prints the auth URL
-3. Waits for callback
+3. Also accepts manual URL paste (whichever works first)
 4. Saves credentials
 5. Exits
 
 Perfect for integration into larger automation scripts.
+Works with Cursor (auto port forwarding) or plain SSH (manual paste).
 """
 
 import json
 import os
 import sys
 import threading
+import time
+import select
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -69,7 +72,6 @@ class SimpleOAuthHandler(BaseHTTPRequestHandler):
             threading.Thread(target=lambda: self.shutdown_server(), daemon=True).start()
 
     def shutdown_server(self):
-        import time
         time.sleep(0.5)
         if server_instance:
             server_instance.shutdown()
@@ -134,8 +136,9 @@ def run_oauth_flow(oauth_keys_path='configs/gcp-oauth.keys.json',
 
         auth_url, _ = flow.authorization_url(**auth_url_params)
 
-        # Start server
+        # Start server with timeout support
         server_instance = HTTPServer(('localhost', SERVER_PORT), SimpleOAuthHandler)
+        server_instance.timeout = 1.0  # Poll every second to allow checking other conditions
         server_thread = threading.Thread(target=server_instance.serve_forever, daemon=True)
         server_thread.start()
 
@@ -145,8 +148,12 @@ def run_oauth_flow(oauth_keys_path='configs/gcp-oauth.keys.json',
             print('='*80)
             print(auth_url)
             print('='*80)
-            print('Please open the URL above in a browser to authorize. You need to authorize all the requested permissions.')
-            print('Waiting for authorization... If you have completed authorization but still stop at this message without proceeding, please revisit the URL above and try again.')
+            print()
+            print('Please open the URL above in a browser to authorize.')
+            print('You need to authorize all the requested permissions.')
+            print()
+            print('Waiting for authorization...')
+            print('(If browser shows "This site cannot be reached", paste the URL in the brower here): ', end='', flush=True)
 
         # Auto-open browser
         if auto_open_browser:
@@ -156,9 +163,44 @@ def run_oauth_flow(oauth_keys_path='configs/gcp-oauth.keys.json',
             except:
                 pass
 
-        # Wait for callback
-        server_instance.serve_forever()
-
+        # Wait for either HTTP callback or manual input (non-blocking)
+        manual_code = None
+        stdin_buffer = ""
+        
+        while not auth_code and not auth_error:
+            # Check if stdin has data (non-blocking)
+            if sys.stdin.isatty():
+                readable, _, _ = select.select([sys.stdin], [], [], 0.2)
+                if readable:
+                    try:
+                        line = sys.stdin.readline()
+                        if line:
+                            stdin_buffer += line.strip()
+                            # Try to parse as URL
+                            if 'code=' in stdin_buffer:
+                                parsed = urlparse(stdin_buffer)
+                                params = parse_qs(parsed.query)
+                                if 'code' in params:
+                                    manual_code = params['code'][0]
+                                    break
+                                elif 'error' in params:
+                                    auth_error = params['error'][0]
+                                    break
+                    except:
+                        pass
+            else:
+                time.sleep(0.2)
+        
+        # Use manual code if HTTP callback didn't provide one
+        if not auth_code and manual_code:
+            auth_code = manual_code
+        
+        # Cleanup server
+        try:
+            server_instance.shutdown()
+        except:
+            pass
+        
         if auth_error:
             if verbose:
                 print(f'ERROR: OAuth failed - {auth_error}', file=sys.stderr)

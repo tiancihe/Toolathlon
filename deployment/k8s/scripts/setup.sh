@@ -2,7 +2,19 @@
 
 # Set variables
 k8sconfig_path_dir=deployment/k8s/configs
-cluster_prefix="cluster"
+
+# Read instance_suffix from ports_config.yaml
+instance_suffix=$(uv run python -c "
+import yaml
+try:
+    with open('configs/ports_config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+        print(config.get('instance_suffix', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+
+cluster_prefix="cluster${instance_suffix}"
 cluster_count=1
 batch_size=3      # Number of clusters per batch
 batch_delay=5     # Wait time (seconds) between batches
@@ -58,11 +70,24 @@ cleanup_existing_clusters() {
         log_info "Found the following clusters:"
         echo "$existing_clusters"
         
-        # Delete each cluster
-        while IFS= read -r cluster; do
-            log_info "Deleting cluster: $cluster"
-            kind delete cluster --name "$cluster"
-        done <<< "$existing_clusters"
+        # Only delete clusters named "${cluster_prefix}${i}", where i is a positive integer,
+        # and also delete the following fixed names with instance_suffix consideration:
+        #   cluster-cleanup${instance_suffix}
+        #   cluster-mysql${instance_suffix}
+        #   cluster-pr-preview${instance_suffix}
+        #   cluster-redis-helm${instance_suffix}
+        #   cluster-safety-audit${instance_suffix}
+        for cluster in $existing_clusters; do
+            if [[ $cluster =~ ^${cluster_prefix}[1-9][0-9]*$ ]] || \
+               [[ "$cluster" == "cluster-cleanup${instance_suffix}" ]] || \
+               [[ "$cluster" == "cluster-mysql${instance_suffix}" ]] || \
+               [[ "$cluster" == "cluster-pr-preview${instance_suffix}" ]] || \
+               [[ "$cluster" == "cluster-redis-helm${instance_suffix}" ]] || \
+               [[ "$cluster" == "cluster-safety-audit${instance_suffix}" ]]; then
+                log_info "Deleting cluster: $cluster"
+                kind delete cluster --name "$cluster"
+            fi
+        done
         
         log_info "All clusters have been deleted"
     else

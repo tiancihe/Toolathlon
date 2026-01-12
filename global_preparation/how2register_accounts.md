@@ -109,8 +109,11 @@ Finally, similar to the above steps, create an intrgration key for evaluation us
 
 
 #### SnowFlake Account
+*Due to the fast changes in snowflake's UI, the screenshots provided in this section may not 100% reflect the actual page you see in your browser. Please be careful.
+
 We recommand register a new Snowflake account (see https://signup.snowflake.com/). After you have created and activated the account. Find your account details and fill them into the `snowflake_account`, `snowflake_role`, and `snowflake_user` variables in `configs/token_key_session.py`
 ![](./figures/snowflake_part1.png)
+*Note, the `User Name` in the following figure now becomes `Login name`.
 ![](./figures/snowflake_part2.png)
 We also need to generate a private key for the snowflake account, you can do this by running the following:
 
@@ -120,7 +123,7 @@ openssl genrsa 2048 | openssl pkcs8 -topk8 -v2 des3 -inform PEM -out ./configs/s
 # generate a public key
 openssl rsa -in ./configs/snowflake_rsa_key.p8 -pubout -out ./configs/snowflake_rsa_key.pub
 # show the public key
-cat ./configs/snowflake_rsa_key.pub | grep -v "BEGIN PUBLIC KEY" | grep -v "END PUBLIC KEY" | tr -d '\n'
+cat ./configs/snowflake_rsa_key.pub | grep -v "BEGIN PUBLIC KEY" | grep -v "END PUBLIC KEY" | tr -d '\n'; echo
 ```
 then login to your snowflake and configure the shown public key in the snowflake console：
 1. create a new SQL file
