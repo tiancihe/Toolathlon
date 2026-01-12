@@ -4,11 +4,11 @@
 # on the same machine without port conflicts.
 #
 # Usage:
-#   python scripts/apply_port_numbers.py ports_config.yaml
-#   # ... run your tasks ...
-#   python scripts/apply_port_numbers.py --restore
+#   see global_preparation/apply_port_numbers.py
 
-# Instance suffix for container names (e.g., "_inst1", "_inst2")
+# Instance suffix for container names
+# we suggest -inst-alpha, -inst-beta ... naming like this. 
+# Note that `-` and upper cases are not allowed!
 # Leave empty ("") for default container names
 instance_suffix: ""
 
