@@ -710,7 +710,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                         'prompt is too long',
                         'maximum number of tokens',
                         'maximum prompt length is', # for xAI model
-                        'request exceeded model token limit' # for kimi
+                        'request exceeded model token limit', # for kimi
+                        'exceed max message tokens' # for seed
                     ]):
                         context_too_long = True
                         
@@ -761,7 +762,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                             'prompt is too long',
                             'maximum number of tokens',
                             'maximum prompt length is', # for xAI model
-                            'request exceeded model token limit' # for kimi
+                            'request exceeded model token limit', # for kimi
+                            'exceed max message tokens' # for seed
                         ]) or error_code in ['string_above_max_length', 'context_length_exceeded', 'messages_too_long']:
                             context_too_long = True
                     except:
@@ -783,7 +785,8 @@ class OpenAIChatCompletionsModelWithRetry(OpenAIChatCompletionsModel):
                         'prompt is too long',
                         'maximum number of tokens',
                         'maximum prompt length is', # for xAI model
-                        'request exceeded model token limit' # for kimi
+                        'request exceeded model token limit', # for kimi
+                        'exceed max message tokens' # for seed
                     ]):
                         context_too_long = True
                 
@@ -1095,6 +1098,17 @@ class CustomModelProviderXAI(ModelProvider):
                                                    debug=debug,
                                                    short_model_name=short_model_name)
 
+class CustomModelProviderZAI(ModelProvider):
+    def get_model(self, model_name: str | None, debug: bool = True, short_model_name: str | None = None) -> Model:
+        client = AsyncOpenAI(
+            api_key=global_configs.zai_official_key,
+            base_url="https://open.bigmodel.cn/api/paas/v4/",
+        )
+        return OpenAIChatCompletionsModelWithRetry(model=model_name, 
+                                                   openai_client=client,
+                                                   debug=debug,
+                                                   short_model_name=short_model_name)
+                                                   
 class CustomModelProviderUnified(ModelProvider):
     def get_model(self, model_name: str | None, debug: bool = True, short_model_name: str | None = None) -> Model:
         import os
@@ -1139,6 +1153,7 @@ model_provider_mapping = {
     "deepseek_official": CustomModelProviderDeepSeekOfficial,
     "google": CustomModelProviderGoogle,
     "xai": CustomModelProviderXAI,
+    "zai_official": CustomModelProviderZAI,
     "unified": CustomModelProviderUnified,
     "openai_stateful_responses": CustomModelProviderOpenAIStatefulResponses,
 }
@@ -1321,10 +1336,19 @@ API_MAPPINGS = {
     ),
 
     'glm-4.6': Dict(
-        api_model={"openrouter": "z-ai/glm-4.6"},
+        api_model={"openrouter": "z-ai/glm-4.6",
+                   "zai_official": "glm-4.6"},
         price=[0.6/1000, 2.2/1000],
         concurrency=32,
         context_window=128000,
+        openrouter_config={"provider": {"only": ["z-ai"]}}
+    ),
+    'glm-4.7': Dict(
+        api_model={"openrouter": "z-ai/glm-4.7",
+                    "zai_official": "glm-4.7"},
+        price=[0.6/1000, 2.2/1000],
+        concurrency=32,
+        context_window=200000,
         openrouter_config={"provider": {"only": ["z-ai"]}}
     ),
     "qwen-3-coder-0722": Dict(
@@ -1360,6 +1384,14 @@ API_MAPPINGS = {
         price=[0.3/1000, 1.2/1000],
         concurrency=32,
         context_window=200000,
+        openrouter_config={"provider": {"only": ["minimax"]}}
+    ),
+    "minimax-m2.1": Dict(
+        api_model={
+            "openrouter": "minimax/minimax-m2.1"},
+        price=[0.3/1000, 1.2/1000],
+        concurrency=32,
+        context_window=204800,
         openrouter_config={"provider": {"only": ["minimax"]}}
     ),
     # "gpt-oss-120b": Dict(
