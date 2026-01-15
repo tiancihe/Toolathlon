@@ -458,6 +458,10 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
     log_file = str(job_dir / "server_stdout.log")
     ws_proxy_process = None
 
+    # Save needed fields to local variables in case current_job becomes None during execution
+    client_ip = current_job.get("client_ip") if current_job else "unknown"
+    start_timestamp = current_job.get("start_timestamp") if current_job else start_time
+
     try:
         with open(log_file, 'w') as f:
             f.write(f"=== Toolathlon Evaluation Server Log ===\n")
@@ -549,7 +553,8 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
             log_file=log_file
         )
 
-        current_job["process"] = run_process
+        if current_job is not None:
+            current_job["process"] = run_process
 
         # Monitor execution with timeout
         while run_process.returncode is None:
@@ -562,12 +567,13 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
                 run_process.kill()
                 await run_process.wait()
 
-                current_job["status"] = "timeout"
-                current_job["error"] = f"Task exceeded {TIMEOUT_SECONDS//60} minutes"
+                if current_job is not None:
+                    current_job["status"] = "timeout"
+                    current_job["error"] = f"Task exceeded {TIMEOUT_SECONDS//60} minutes"
                 log(f"[Server] Job {job_id} timed out after {elapsed//60:.1f} minutes")
 
                 # Record completion time and duration
-                record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
+                record_job_completion(job_id, client_ip, start_timestamp)
 
                 return
 
@@ -582,35 +588,41 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
         if eval_stats_file.exists():
             with open(eval_stats_file, 'r') as f:
                 eval_stats = json.load(f)
-            current_job["eval_stats"] = eval_stats
+            if current_job is not None:
+                current_job["eval_stats"] = eval_stats
         else:
-            current_job["eval_stats"] = {"error": "eval_stats.json not found"}
+            if current_job is not None:
+                current_job["eval_stats"] = {"error": "eval_stats.json not found"}
 
         # Read traj_log_all.jsonl
         traj_log_file = job_dir / "traj_log_all.jsonl"
         if traj_log_file.exists():
             with open(traj_log_file, 'r') as f:
-                current_job["traj_log_all"] = f.read()
+                if current_job is not None:
+                    current_job["traj_log_all"] = f.read()
         else:
-            current_job["traj_log_all"] = None
+            if current_job is not None:
+                current_job["traj_log_all"] = None
 
-        current_job["status"] = "completed"
+        if current_job is not None:
+            current_job["status"] = "completed"
         log(f"[Server] Job {job_id} completed successfully")
 
         # Record completion time and duration
-        record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
+        record_job_completion(job_id, client_ip, start_timestamp)
 
     except Exception as e:
         error_msg = str(e)
         with open(log_file, 'a') as f:
             f.write(f"\n\n!!! ERROR: {error_msg} !!!\n")
 
-        current_job["status"] = "failed"
-        current_job["error"] = error_msg
+        if current_job is not None:
+            current_job["status"] = "failed"
+            current_job["error"] = error_msg
         log(f"[Server] Job {job_id} failed: {error_msg}")
 
         # Record completion time and duration
-        record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
+        record_job_completion(job_id, client_ip, start_timestamp)
 
     finally:
         # Keep job info for 60 seconds for client to retrieve
@@ -1068,6 +1080,9 @@ async def cancel_job(job_id: str):
         log(f"[Server] Warning: Failed to clean up {container_runtime} containers: {e}")
 
     current_job["status"] = "cancelled"
+
+    # Record completion time and duration (for cancelled jobs)
+    record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
 
     # Clean up after a short delay
     await asyncio.sleep(10)
