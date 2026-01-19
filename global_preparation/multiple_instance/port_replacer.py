@@ -65,6 +65,7 @@ class PortReplacer:
 
     def validate_port_mappings(self, port_mappings: Dict[int, int]) -> bool:
         """Validate port mappings to ensure no conflicts."""
+        old_ports = set(port_mappings.keys())
         new_ports = list(port_mappings.values())
         new_ports_set = set(new_ports)
 
@@ -74,6 +75,16 @@ class PortReplacer:
         if len(new_ports) != len(new_ports_set):
             duplicates = [p for p in new_ports_set if new_ports.count(p) > 1]
             errors.append(f"ERROR: Duplicate new ports found: {sorted(duplicates)}")
+
+        # Check if any new port equals an old port (prevents double-replacement bugs)
+        # e.g., {1000: 2000, 2000: 3000} would cause 1000 → 2000 → 3000
+        overlap = new_ports_set & old_ports
+        if overlap:
+            # Filter out identity mappings (e.g., 1000: 1000) which are harmless
+            real_overlap = {p for p in overlap if port_mappings.get(p) != p}
+            if real_overlap:
+                errors.append(f"ERROR: New ports overlap with old ports: {sorted(real_overlap)}")
+                errors.append("       This would cause double-replacement bugs during apply")
 
         if errors:
             for error in errors:
@@ -405,11 +416,15 @@ class PortReplacer:
         print("=" * 70)
         print(f"{'[DRY RUN] ' if self.dry_run else ''}Total: {total_files_restored} files restored, {total_replacements} replacements")
 
+        # Check for errors BEFORE deleting change log (consistent with restore_all_ports)
         if errors:
             print("\nErrors encountered:")
             for error in errors:
                 print(f"  ✗ {error}")
+            print("\n⚠ Change log NOT deleted due to errors. You can retry restoration.")
+            return False
 
+        # Only delete change log if no errors occurred
         if not self.dry_run and total_files_restored > 0:
             try:
                 self.changes_log_path.unlink()
@@ -419,7 +434,7 @@ class PortReplacer:
 
             print("\n✓ Port numbers restored to original values")
 
-        return len(errors) == 0
+        return True
 
     def _restore_with_git(self) -> bool:
         """Restore using git restore."""

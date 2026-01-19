@@ -185,6 +185,8 @@ def restore_all_ports(project_root: Path, config_path: str = 'configs/ports_conf
     # Step 2: Collect all port mappings and affected files from change logs
     port_restore_map: Dict[int, set] = {}
     files_to_restore: Dict[str, set] = {}  # file -> set of (default_port, new_port) tuples
+    errors = []  # Track all errors including change log read failures
+    failed_change_logs = set()  # Track change logs that failed to read
     
     for changes_file in changes_files:
         try:
@@ -207,7 +209,10 @@ def restore_all_ports(project_root: Path, config_path: str = 'configs/ports_conf
                     files_to_restore[file_path].add((default_port, new_port))
                 
         except Exception as e:
-            print(f"   ⚠ Error reading {changes_file.name}: {e}")
+            error_msg = f"Error reading change log {changes_file.name}: {e}"
+            print(f"   ⚠ {error_msg}")
+            errors.append(error_msg)
+            failed_change_logs.add(changes_file)
     
     if not port_restore_map:
         print("\n⚠ No port mappings found in change logs.")
@@ -235,7 +240,7 @@ def restore_all_ports(project_root: Path, config_path: str = 'configs/ports_conf
     
     total_files_restored = 0
     total_replacements = 0
-    errors = []
+    # errors list is already initialized above (includes change log read failures)
     
     # Only process files that were recorded in change logs
     all_files = set(files_to_restore.keys())
