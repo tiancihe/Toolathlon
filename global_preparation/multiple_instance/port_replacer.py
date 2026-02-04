@@ -105,6 +105,7 @@ class PortReplacer:
 
         total_replacements = 0
         unique_files_changed = set()
+        skipped_ports = 0  # Count ports already at target value
 
         for default_port, port_info in files_by_port.items():
             default_port = int(default_port)
@@ -114,6 +115,7 @@ class PortReplacer:
                 continue
 
             if default_port == target_port:
+                skipped_ports += 1
                 continue
 
             comment = port_info.get('comment', f'Port {default_port}')
@@ -150,6 +152,14 @@ class PortReplacer:
         print("=" * 70)
         print(f"Total: {len(unique_files_changed)} unique files changed, {total_replacements} replacements")
 
+        # Show skipped ports info
+        if skipped_ports > 0:
+            print(f"Skipped: {skipped_ports} ports (already at target value)")
+
+        # If no files changed but ports are already at target, this is success (idempotent)
+        if len(unique_files_changed) == 0 and skipped_ports > 0:
+            print("\n✓ All ports are already at their target values (no changes needed)")
+
         if not self.dry_run and self.changes_log:
             # Save changes log
             with open(self.changes_log_path, 'w') as f:
@@ -161,7 +171,10 @@ class PortReplacer:
                 }, f, indent=2)
             print(f"\nChanges logged to: {self.changes_log_path}")
 
-        return len(unique_files_changed) > 0
+        # Success if:
+        # - Files were changed, OR
+        # - Ports are already at target value (idempotent)
+        return len(unique_files_changed) > 0 or skipped_ports > 0
 
     def restore_from_changelog(self) -> bool:
         """
