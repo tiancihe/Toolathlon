@@ -215,11 +215,26 @@ uv run python global_preparation/apply_port_numbers.py --dry-run
 # Apply changes (with confirmation)
 uv run python global_preparation/apply_port_numbers.py
 
+# Restore to default ports
+uv run python global_preparation/apply_port_numbers.py --restore
+
 # Check current status
 uv run python global_preparation/apply_port_numbers.py --status
 ```
 
-**Note:** The script automatically handles port restoration when applying new configurations.
+**Important Notes:**
+
+- **Before `git pull`:** Always restore ports to default values first to avoid conflicts:
+  ```bash
+  uv run python global_preparation/apply_port_numbers.py --restore
+  git pull
+  # Then re-apply your port configuration if needed
+  uv run python global_preparation/apply_port_numbers.py
+  ```
+
+- The `apply` command automatically restores from changelog before applying new configurations, ensuring clean state transitions.
+
+- The `restore` command deletes the changelog after restoring ports, returning the system to its initial state (default ports, no changelog). 
 
 ## Visualization
 
