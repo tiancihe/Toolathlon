@@ -676,7 +676,8 @@ def main():
     if import_emails():
         success_count += 1
     else:
-        print("⚠️  Email import failed - MCP server may be needed for manual import")
+        print("❌ Email import failed - MCP server may be needed for manual import - aborting")
+        sys.exit(1)
     
     sleep(2)
     
@@ -688,9 +689,11 @@ def main():
             if extract_student_ids(args):
                 success_count += 1
             else:
-                print("⚠️  Student ID extraction failed, but continuing...")
+                print("❌ Student ID extraction failed - aborting")
+                sys.exit(1)
         else:
-            print("⚠️  Canvas setup failed, but continuing...")
+            print("❌ Canvas setup failed - aborting")
+            sys.exit(1)
     else:
         print("\n⏭️  Skipping Canvas setup")
         success_count += 2  # Count both Canvas setup and student ID extraction as success if skipped

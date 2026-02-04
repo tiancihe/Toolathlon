@@ -65,7 +65,7 @@ def find_js_content_from_result(result: str) -> str:
         return None
 
     xxx =  result[startpos+len("### Result"):endpos].strip().strip("'\"")
-    if xxx == "undefined" or xxx == "":
+    if xxx == "undefined" or xxx == "" or xxx=="null":
         return None
     return xxx
 

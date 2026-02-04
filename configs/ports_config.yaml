@@ -4,11 +4,17 @@
 # on the same machine without port conflicts.
 #
 # Usage:
-#   python scripts/apply_port_numbers.py ports_config.yaml
-#   # ... run your tasks ...
-#   python scripts/apply_port_numbers.py --restore
+#   see global_preparation/apply_port_numbers.py
 
-# Instance suffix for container names (e.g., "_inst1", "_inst2")
+# Instance prefix for task container names (e.g., "alpha-", "beta-", "service1-")
+# Used to isolate containers between different eval server instances
+# Container names will be: {instance_prefix}toolathlon-{task}-{timestamp}
+# Leave empty ("") to use default "toolathlon-" prefix
+instance_prefix: ""
+
+# Instance suffix for container names
+# we suggest -inst-alpha, -inst-beta ... naming like this. 
+# Note that `-` and upper cases are not allowed!
 # Leave empty ("") for default container names
 instance_suffix: ""
 
@@ -97,7 +103,6 @@ files_by_port:
     - tasks/finalpool/k8s-deployment-cleanup/files/involved_emails.json
     - tasks/finalpool/landing-task-reminder/emails_config.json
     - tasks/finalpool/landing-task-reminder/groundtruth_workspace/involved_emails.json
-    - tasks/finalpool/live-transactions/preprocess/live_transactions_dataset.json
     - tasks/finalpool/meeting-assign/email_config.json
     - tasks/finalpool/meeting-assign/preprocess/clean_local_emails.py
     - tasks/finalpool/meeting-assign/preprocess/main.py
@@ -116,7 +121,6 @@ files_by_port:
     - tasks/finalpool/student-interview/email_config.json
     - tasks/finalpool/travel-expense-reimbursement/email_config.json
     - tasks/finalpool/travel-expense-reimbursement/files/involved_emails.json
-    - tasks/finalpool/verl-dataset/groundtruth_workspace/deepscaler.json
     - tasks/finalpool/woocommerce-customer-survey/email_config.json
     - tasks/finalpool/woocommerce-new-product/emails_config.json
     - tasks/finalpool/woocommerce-new-welcome/emails_config.json

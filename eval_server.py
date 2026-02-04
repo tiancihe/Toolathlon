@@ -22,6 +22,8 @@ import io
 import hashlib
 import tempfile
 import shutil
+import yaml
+import signal
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -160,6 +162,43 @@ def load_sensitive_values() -> Dict[str, str]:
     except Exception as e:
         log(f"Warning: Failed to load sensitive values: {e}")
         return {}
+
+def load_instance_config() -> Dict[str, str]:
+    """Load instance prefix and container runtime from config files"""
+    config = {
+        'instance_prefix': '',  # Default: no prefix
+        'container_runtime': 'docker'  # Default: docker
+    }
+
+    # Read instance_prefix from ports_config.yaml
+    try:
+        ports_config_path = Path(__file__).parent / 'configs' / 'ports_config.yaml'
+        if ports_config_path.exists():
+            with open(ports_config_path, 'r') as f:
+                ports_config = yaml.safe_load(f)
+                instance_prefix = ports_config.get('instance_prefix', '')
+                if instance_prefix and isinstance(instance_prefix, str):
+                    config['instance_prefix'] = instance_prefix
+                    log(f"[Server] Loaded instance_prefix from ports_config.yaml: '{instance_prefix}'")
+                else:
+                    log(f"[Server] Using default instance_prefix (empty)")
+    except Exception as e:
+        log(f"Warning: Failed to load instance_prefix from ports_config.yaml: {e}")
+
+    # Read container_runtime from global_configs.py
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'configs'))
+        from global_configs import global_configs
+        runtime = global_configs.get('podman_or_docker', 'docker')
+        if runtime in ['docker', 'podman']:
+            config['container_runtime'] = runtime
+            log(f"[Server] Loaded container_runtime from global_configs.py: {runtime}")
+        else:
+            log(f"Warning: Invalid container_runtime '{runtime}', using default 'docker'")
+    except Exception as e:
+        log(f"Warning: Failed to load container_runtime from global_configs.py: {e}")
+
+    return config
 
 def anonymize_content(content: str, sensitive_values: Dict[str, str]) -> str:
     """Anonymize sensitive values in content"""
@@ -396,11 +435,13 @@ def check_ip_rate_limit(ip: str) -> tuple[bool, str, dict]:
 async def run_command_async(cmd: list, env: dict, log_file: str):
     """Run command asynchronously and capture output to log file"""
     with open(log_file, 'a') as log_f:
+        # Create process in new session so we can kill the entire process tree later
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=log_f,
             stderr=asyncio.subprocess.STDOUT,
-            env=env
+            env=env,
+            start_new_session=True  # Creates new process group for easy cleanup
         )
         return process
 
@@ -416,6 +457,10 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
 
     log_file = str(job_dir / "server_stdout.log")
     ws_proxy_process = None
+
+    # Save needed fields to local variables in case current_job becomes None during execution
+    client_ip = current_job.get("client_ip") if current_job else "unknown"
+    start_timestamp = current_job.get("start_timestamp") if current_job else start_time
 
     try:
         with open(log_file, 'w') as f:
@@ -508,7 +553,8 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
             log_file=log_file
         )
 
-        current_job["process"] = run_process
+        if current_job is not None:
+            current_job["process"] = run_process
 
         # Monitor execution with timeout
         while run_process.returncode is None:
@@ -521,12 +567,13 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
                 run_process.kill()
                 await run_process.wait()
 
-                current_job["status"] = "timeout"
-                current_job["error"] = f"Task exceeded {TIMEOUT_SECONDS//60} minutes"
+                if current_job is not None:
+                    current_job["status"] = "timeout"
+                    current_job["error"] = f"Task exceeded {TIMEOUT_SECONDS//60} minutes"
                 log(f"[Server] Job {job_id} timed out after {elapsed//60:.1f} minutes")
 
                 # Record completion time and duration
-                record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
+                record_job_completion(job_id, client_ip, start_timestamp)
 
                 return
 
@@ -541,35 +588,41 @@ async def execute_evaluation(job_id: str, mode: str, config: Dict[str, Any]):
         if eval_stats_file.exists():
             with open(eval_stats_file, 'r') as f:
                 eval_stats = json.load(f)
-            current_job["eval_stats"] = eval_stats
+            if current_job is not None:
+                current_job["eval_stats"] = eval_stats
         else:
-            current_job["eval_stats"] = {"error": "eval_stats.json not found"}
+            if current_job is not None:
+                current_job["eval_stats"] = {"error": "eval_stats.json not found"}
 
         # Read traj_log_all.jsonl
         traj_log_file = job_dir / "traj_log_all.jsonl"
         if traj_log_file.exists():
             with open(traj_log_file, 'r') as f:
-                current_job["traj_log_all"] = f.read()
+                if current_job is not None:
+                    current_job["traj_log_all"] = f.read()
         else:
-            current_job["traj_log_all"] = None
+            if current_job is not None:
+                current_job["traj_log_all"] = None
 
-        current_job["status"] = "completed"
+        if current_job is not None:
+            current_job["status"] = "completed"
         log(f"[Server] Job {job_id} completed successfully")
 
         # Record completion time and duration
-        record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
+        record_job_completion(job_id, client_ip, start_timestamp)
 
     except Exception as e:
         error_msg = str(e)
         with open(log_file, 'a') as f:
             f.write(f"\n\n!!! ERROR: {error_msg} !!!\n")
 
-        current_job["status"] = "failed"
-        current_job["error"] = error_msg
+        if current_job is not None:
+            current_job["status"] = "failed"
+            current_job["error"] = error_msg
         log(f"[Server] Job {job_id} failed: {error_msg}")
 
         # Record completion time and duration
-        record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
+        record_job_completion(job_id, client_ip, start_timestamp)
 
     finally:
         # Keep job info for 60 seconds for client to retrieve
@@ -968,33 +1021,48 @@ async def cancel_job(job_id: str):
         else:
             raise HTTPException(status_code=404, detail="Job not found")
 
-    # Kill process if exists
+    # Kill process tree if exists
     if "process" in current_job:
         process = current_job["process"]
         try:
-            # Kill the main bash process
-            process.kill()
-            await process.wait()
+            # Kill the entire process tree using process group
+            pid = process.pid
+            log(f"[Server] Killing process tree for PID {pid}...")
 
-            # Kill all related Python processes by name
             import subprocess
             try:
-                # Kill all run_parallel.py processes
-                subprocess.run(['pkill', '-9', '-f', 'run_parallel.py'], check=False)
-                # Kill all run_single_containerized.sh processes
-                subprocess.run(['pkill', '-9', '-f', 'run_single_containerized.sh'], check=False)
-            except:
-                pass
-        except:
-            pass
+                # Kill process group (more reliable than pkill)
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                log(f"[Server] Killed process group for PID {pid}")
+            except ProcessLookupError:
+                log(f"[Server] Process {pid} already terminated")
+            except Exception as e:
+                log(f"[Server] Warning: Failed to kill process group: {e}")
+                # Fallback: kill just the main process
+                try:
+                    process.kill()
+                    await process.wait()
+                except:
+                    pass
+        except Exception as e:
+            log(f"[Server] Warning: Error during process cleanup: {e}")
 
-    # Stop and remove all toolathlon docker containers
+    # Load instance configuration
+    instance_config = load_instance_config()
+    instance_prefix = instance_config['instance_prefix']
+    container_runtime = instance_config['container_runtime']
+
+    # Stop and remove task containers matching this instance
     import subprocess
     try:
-        log(f"[Server] Cleaning up toolathlon docker containers...")
-        # Get all containers with name prefix "toolathlon"
+        # Build container name filter based on instance_prefix
+        container_name_filter = f"{instance_prefix}toolathlon"
+
+        log(f"[Server] Cleaning up {container_runtime} containers with prefix '{container_name_filter}'...")
+
+        # Get all containers matching the prefix
         result = subprocess.run(
-            ['docker', 'ps', '-a', '--filter', 'name=toolathlon', '--format', '{{.ID}}'],
+            [container_runtime, 'ps', '-a', '--filter', f'name={container_name_filter}', '--format', '{{.ID}}'],
             capture_output=True,
             text=True,
             check=False
@@ -1004,12 +1072,17 @@ async def cancel_job(job_id: str):
 
         if container_ids:
             # Force remove containers immediately
-            subprocess.run(['docker', 'rm', '-f'] + container_ids, check=False, timeout=10)
-            log(f"[Server] Force removed {len(container_ids)} toolathlon containers")
+            subprocess.run([container_runtime, 'rm', '-f'] + container_ids, check=False, timeout=10)
+            log(f"[Server] Force removed {len(container_ids)} containers with prefix '{container_name_filter}'")
+        else:
+            log(f"[Server] No containers found with prefix '{container_name_filter}'")
     except Exception as e:
-        log(f"[Server] Warning: Failed to clean up docker containers: {e}")
+        log(f"[Server] Warning: Failed to clean up {container_runtime} containers: {e}")
 
     current_job["status"] = "cancelled"
+
+    # Record completion time and duration (for cancelled jobs)
+    record_job_completion(job_id, current_job["client_ip"], current_job["start_timestamp"])
 
     # Clean up after a short delay
     await asyncio.sleep(10)
@@ -1258,7 +1331,7 @@ async def cleanup_old_files_periodically():
 # ===== Main =====
 
 def cleanup_on_shutdown():
-    """Cleanup running jobs and docker containers on server shutdown"""
+    """Cleanup running jobs and containers on server shutdown"""
     global current_job, ws_proxy_process, ws_proxy_log_file
 
     print("\n" + "="*60)
@@ -1285,35 +1358,46 @@ def cleanup_on_shutdown():
         job_id = current_job.get("job_id")
         print(f"Cleaning up running job: {job_id}")
 
-        # Kill process
+        # Kill process tree
         if "process" in current_job:
             process = current_job["process"]
             try:
-                print(f"  - Killing process (PID: {process.pid})...")
-                process.kill()
-                print(f"  ✓ Process killed")
+                pid = process.pid
+                print(f"  - Killing process tree (PID: {pid})...")
 
-                # Kill all related Python processes by name
                 import subprocess
                 try:
-                    print(f"  - Killing run_parallel.py processes...")
-                    subprocess.run(['pkill', '-9', '-f', 'run_parallel.py'], check=False)
-                    print(f"  - Killing run_single_containerized.sh processes...")
-                    subprocess.run(['pkill', '-9', '-f', 'run_single_containerized.sh'], check=False)
-                    print(f"  ✓ All related processes killed")
+                    # Kill process group
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    print(f"  ✓ Process tree killed")
+                except ProcessLookupError:
+                    print(f"  - Process {pid} already terminated")
                 except Exception as e:
-                    print(f"  ✗ Failed to kill related processes: {e}")
+                    print(f"  ✗ Failed to kill process group: {e}")
+                    # Fallback: kill just the main process
+                    try:
+                        process.kill()
+                        print(f"  ✓ Main process killed")
+                    except:
+                        pass
             except Exception as e:
                 print(f"  ✗ Failed to kill process: {e}")
     else:
         print("No running jobs to clean up")
 
-    # Clean up docker containers
+    # Load instance configuration
+    instance_config = load_instance_config()
+    instance_prefix = instance_config['instance_prefix']
+    container_runtime = instance_config['container_runtime']
+
+    # Clean up containers
     import subprocess
     try:
-        print("Cleaning up toolathlon docker containers...")
+        container_name_filter = f"{instance_prefix}toolathlon"
+        print(f"Cleaning up {container_runtime} containers with prefix '{container_name_filter}'...")
+
         result = subprocess.run(
-            ['docker', 'ps', '-a', '--filter', 'name=toolathlon', '--format', '{{.ID}}'],
+            [container_runtime, 'ps', '-a', '--filter', f'name={container_name_filter}', '--format', '{{.ID}}'],
             capture_output=True,
             text=True,
             check=False,
@@ -1324,13 +1408,13 @@ def cleanup_on_shutdown():
 
         if container_ids:
             print(f"  - Force removing {len(container_ids)} containers...")
-            # Use docker rm -f to force remove immediately without graceful shutdown
-            subprocess.run(['docker', 'rm', '-f'] + container_ids, check=False, timeout=10)
+            # Use container runtime rm -f to force remove immediately without graceful shutdown
+            subprocess.run([container_runtime, 'rm', '-f'] + container_ids, check=False, timeout=10)
             print(f"  ✓ Cleaned up {len(container_ids)} containers")
         else:
             print("  - No containers to clean up")
     except Exception as e:
-        print(f"  ✗ Warning: Failed to clean up docker containers: {e}")
+        print(f"  ✗ Warning: Failed to clean up {container_runtime} containers: {e}")
 
     print("="*60)
     print("Server shutdown complete")

@@ -9,8 +9,19 @@
 # read out `podman_or_docker` from global_configs.py
 podman_or_docker=$(uv run python -c "import sys; sys.path.append('configs'); from global_configs import global_configs; print(global_configs.podman_or_docker)")
 
+# Read instance_suffix from ports_config.yaml
+instance_suffix=$(uv run python -c "
+import yaml
+try:
+    with open('configs/ports_config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+        print(config.get('instance_suffix', ''))
+except:
+    print('')
+" 2>/dev/null || echo "")
+
 DOMAIN="mcp.com"
-CONTAINER_NAME="poste"
+CONTAINER_NAME="poste${instance_suffix}"
 CONFIG_DIR="$(dirname "$0")/../configs"
 ACCOUNTS_FILE="$CONFIG_DIR/created_accounts.json"
 

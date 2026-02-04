@@ -65,14 +65,38 @@ except Exception as e:
 
 echo "Using container runtime: $CONTAINER_RUNTIME"
 
+# Read instance_prefix from ports_config.yaml
+INSTANCE_PREFIX=$(uv run python -c "
+import sys
+import yaml
+from pathlib import Path
+try:
+    ports_config_path = Path('$PROJECT_ROOT/configs/ports_config.yaml')
+    if ports_config_path.exists():
+        with open(ports_config_path, 'r') as f:
+            config = yaml.safe_load(f)
+            prefix = config.get('instance_prefix', '')
+            print(prefix if prefix else '')
+    else:
+        print('')
+except Exception:
+    print('')
+" 2>/dev/null)
+
+if [ -z "$INSTANCE_PREFIX" ]; then
+    echo "Using default container prefix (no instance prefix)"
+else
+    echo "Using instance prefix: $INSTANCE_PREFIX"
+fi
+
 # Use the image name from parameter
 IMAGE_NAME="$image_name"
 echo "Using container image: $IMAGE_NAME"
 
-# Generate unique container name
+# Generate unique container name with instance prefix
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 SAFE_TASK_NAME=$(echo "$task_dir_arg" | sed 's|/|-|g')
-CONTAINER_NAME="toolathlon-${SAFE_TASK_NAME}-${TIMESTAMP}"
+CONTAINER_NAME="${INSTANCE_PREFIX}toolathlon-${SAFE_TASK_NAME}-${TIMESTAMP}"
 
 echo "Container name: $CONTAINER_NAME"
 
