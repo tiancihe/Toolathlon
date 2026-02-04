@@ -14,7 +14,7 @@ instance_prefix: ""
 
 # Instance suffix for container names
 # we suggest -inst-alpha, -inst-beta ... naming like this. 
-# Note that `-` and upper cases are not allowed!
+# Note that `_` and upper cases are not allowed!
 # Leave empty ("") for default container names
 instance_suffix: ""
 

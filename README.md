@@ -189,6 +189,38 @@ If you'd like to evaluate multiple models in sequence, we provide an ensemble sc
 bash scripts/run_parallel_sequential.sh
 ```
 
+## Multi-Instance Configuration
+
+If you want to run multiple Toolathlon instances on the same machine (e.g., for different experiments), you need to configure port mappings and instance identifiers to avoid conflicts.
+
+**Edit `configs/ports_config.yaml`:**
+```yaml
+# Instance identifiers (for container/resource naming)
+instance_prefix: "alpha-"      # Prefix for container names
+instance_suffix: "-inst-alpha" # Suffix for k8s/canvas resources
+
+# Port mappings (map default ports to avoid conflicts)
+port_mappings:
+  10001: 11001  # MinIO
+  20001: 21001  # Other services
+  10005: 11005
+  # ... other ports
+```
+
+**Apply port changes:**
+```bash
+# Preview changes
+uv run python global_preparation/apply_port_numbers.py --dry-run
+
+# Apply changes (with confirmation)
+uv run python global_preparation/apply_port_numbers.py
+
+# Check current status
+uv run python global_preparation/apply_port_numbers.py --status
+```
+
+**Note:** The script automatically handles port restoration when applying new configurations.
+
 ## Visualization
 
 To facilitate viewing the reasoning trajectories of LLMs, we provide a replay tool for developers to visualize any trajectory in `vis_traj`. After obtaining the results, you can simply run the following command:
